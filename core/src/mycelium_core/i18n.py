@@ -190,6 +190,7 @@ class MessageCode(enum.StrEnum):
     AGENT_RUN_ASSIGNEE_INACTIVE = "agent_run.assignee_inactive"
     AGENT_RUN_ALREADY_ACTIVE = "agent_run.already_active"
     AGENT_RUN_TERMINAL = "agent_run.terminal"
+    AGENT_RUN_NO_PROVIDER = "agent_run.no_provider"
     HANDOFF_NOT_FOUND = "handoff.not_found"
     DISPATCH_NOT_FOUND = "dispatch.not_found"
     DISPATCH_NOT_PENDING = "dispatch.not_pending"
@@ -616,6 +617,11 @@ _CATALOG: dict[str, dict[MessageCode, str]] = {
         ),
         MessageCode.AGENT_RUN_ALREADY_ACTIVE: ("An agent run for this task is already active"),
         MessageCode.AGENT_RUN_TERMINAL: ("Agent run has already finished and cannot be cancelled"),
+        MessageCode.AGENT_RUN_NO_PROVIDER: (
+            "No language model provider is configured for this workspace, "
+            "so an agent run would fail on its first step. Configure one, "
+            "or run this task yourself."
+        ),
         MessageCode.HANDOFF_NOT_FOUND: "Handoff not found",
         MessageCode.DISPATCH_NOT_FOUND: "Dispatch request not found",
         MessageCode.DISPATCH_NOT_PENDING: ("Dispatch request is not pending (cannot approve)"),

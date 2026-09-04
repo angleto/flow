@@ -52,7 +52,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mycelium_core import db as db_ctx
-from mycelium_core.ai_providers import LLMProvider, get_llm
+from mycelium_core.ai_providers import LLMProvider, LocalLLM, get_llm
 from mycelium_core.errors import DomainError, NotFoundError
 from mycelium_core.i18n import MessageCode
 from mycelium_core.models.agent_run import AgentRun, AgentRunStatus
@@ -464,6 +464,28 @@ async def start_run(
     if active is not None:
         raise DomainError(MessageCode.AGENT_RUN_ALREADY_ACTIVE)
 
+    # Resolve the provider HERE, above ``session.add(run)``, because a
+    # run row is what makes the damage permanent. ``_drive`` never
+    # raises for a provider error: it writes ``failed`` and returns, so
+    # ``_dispatch_one`` sees a normal return and marks the request
+    # ``dispatched``, and the run row it leaves behind excludes the task
+    # from every later tick. Refusing before the insert leaves nothing
+    # behind and gives the caller a reason instead of a failed run.
+    #
+    # ``LocalLLM`` is the reference stub: its ``complete`` raises
+    # unconditionally, so this is a certain first-step failure and not a
+    # guess. Resolution itself cannot fail -- ``get_llm`` falls back to
+    # the stub and ``llm_resolver`` degrades to it by written contract --
+    # so a guard written against a resolution error would be dead code.
+    # A live probe would answer the same question by spending a real
+    # completion on every dispatch.
+    #
+    # The resolved provider is then handed to ``_drive``, so what was
+    # checked and what runs cannot be two different objects.
+    resolved = provider or get_llm()
+    if isinstance(resolved, LocalLLM):
+        raise DomainError(MessageCode.AGENT_RUN_NO_PROVIDER)
+
     now = dt.datetime.now(tz=dt.UTC)
     run = AgentRun(
         org_id=org_id,
@@ -490,7 +512,7 @@ async def start_run(
             run=run,
             task=task,
             executor=executor,
-            provider=provider or get_llm(),
+            provider=resolved,
         )
         # The run has begun and its context was built from the task's
         # PENDING incoming handoffs (the P4 LLM-recipient delivery

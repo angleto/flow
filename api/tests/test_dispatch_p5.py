@@ -798,3 +798,190 @@ async def test_tick_does_not_queue_a_task_addressed_to_an_external_assistant(
             )
         ).scalar_one()
         assert n_int == 1
+
+
+# --- C5: no provider -> refuse before a run row exists ----------------
+
+
+async def test_approve_without_a_provider_refuses_before_creating_a_run(
+    _fake_embedder: None,
+) -> None:
+    """The silent consumption, closed.
+
+    Provider resolution cannot fail -- ``get_llm`` falls back to the
+    ``LocalLLM`` stub and ``llm_resolver`` degrades to it by written
+    contract -- so the failure used to arrive one step later, inside
+    ``_drive``, which writes ``failed`` and returns without raising.
+    ``_dispatch_one`` then saw a normal return, marked the request
+    ``dispatched``, and the run row already flushed ahead of the
+    provider call removed the task from every later tick. Nothing in
+    this codebase deletes ``AgentRun`` rows, so there was no way back.
+
+    ``_clear_llm()`` first and deliberately: ``set_llm_override`` is
+    module-global state, and an override leaking from an earlier test
+    would make this one pass for the wrong reason.
+    """
+    _clear_llm()
+    async with admin_session() as s:
+        a = await signup(s, email=_email(), password="pw-strong-123", org_name="NOPROV")
+    org, user = a.org_id, a.user_id
+    async with tenant_session(str(org), str(user)) as s:
+        await _capable_agent(s, org=org, user=user)
+        task = await _llm_task(s, org=org, user=user, title="Nobody can run this")
+        await _set_policy(s, org=org, policy=AutonomousDispatch.auto)
+
+        res = await loop.tick(s, org_id=org, actor_id=user, as_of=_AS_OF)
+        assert res.created == 1 and res.approved == 1
+        assert res.dispatched == 0 and res.failed == 1
+
+        req = (
+            await s.execute(select(DispatchRequest).where(DispatchRequest.task_id == task.id))
+        ).scalar_one()
+        assert req.status is DispatchStatus.failed
+        # The stable MessageCode value, not prose: this is what an owner
+        # filters the queue by.
+        assert req.reason == "agent_run.no_provider"
+        assert req.agent_run_id is None
+
+        # Nothing was left behind. This is the assertion that matters:
+        # a run row here would exclude the task permanently.
+        assert (
+            await s.execute(
+                select(func.count()).select_from(AgentRun).where(AgentRun.task_id == task.id)
+            )
+        ).scalar_one() == 0
+
+        # And the task is still proposable, which is the whole point.
+        res2 = await loop.tick(s, org_id=org, actor_id=user, as_of=_AS_OF)
+        assert res2.created == 1
+
+
+async def test_a_failed_run_that_did_nothing_does_not_retire_the_task(
+    _fake_embedder: None,
+) -> None:
+    """The half of the fix that removes the damage already done.
+
+    A provider that resolves and then fails at ``complete()`` -- a
+    revoked key, a network fault, a wrong model -- is not covered by the
+    pre-flight guard: it persists a ``failed`` run at zero steps and
+    zero credit. That row used to retire the task from the loop with the
+    same force as a completed one, while the rule's stated reason,
+    "already produced its artifact", was never true of it.
+
+    A failed run that DID spend still retires the task, and that half is
+    asserted here too: without it the test passes against a predicate
+    that has simply stopped excluding anything.
+    """
+    _clear_llm()
+    async with admin_session() as s:
+        a = await signup(s, email=_email(), password="pw-strong-123", org_name="ZEROSTEP")
+    org, user = a.org_id, a.user_id
+    async with tenant_session(str(org), str(user)) as s:
+        await _capable_agent(s, org=org, user=user, rate=Decimal(0))
+        empty = await _llm_task(s, org=org, user=user, title="Reached no provider")
+        spent = await _llm_task(s, org=org, user=user, title="Burned credit then failed")
+        agent = (
+            await s.execute(
+                select(Executor).where(
+                    Executor.kind == ExecutorKind.llm_agent, Executor.enabled.is_(True)
+                )
+            )
+        ).scalar_one()
+        now = dt.datetime.now(tz=dt.UTC)
+        s.add(
+            AgentRun(
+                org_id=org,
+                task_id=empty.id,
+                executor_id=agent.id,
+                status=AgentRunStatus.failed,
+                steps=0,
+                credits_spent=Decimal(0),
+                started_at=now,
+                ended_at=now,
+            )
+        )
+        s.add(
+            AgentRun(
+                org_id=org,
+                task_id=spent.id,
+                executor_id=agent.id,
+                status=AgentRunStatus.failed,
+                steps=1,
+                credits_spent=Decimal("0.25"),
+                started_at=now,
+                ended_at=now,
+            )
+        )
+        await s.flush()
+
+        # approval_required (the default): the tick proposes, it does
+        # not spend, so no provider is needed to observe the predicate.
+        res = await loop.tick(s, org_id=org, actor_id=user, as_of=_AS_OF)
+        assert res.created == 1
+
+        assert (
+            await s.execute(
+                select(func.count())
+                .select_from(DispatchRequest)
+                .where(DispatchRequest.task_id == empty.id)
+            )
+        ).scalar_one() == 1
+        assert (
+            await s.execute(
+                select(func.count())
+                .select_from(DispatchRequest)
+                .where(DispatchRequest.task_id == spent.id)
+            )
+        ).scalar_one() == 0
+
+
+async def test_a_blocked_run_at_zero_steps_still_retires_the_task(
+    _fake_embedder: None,
+) -> None:
+    """The case a predicate written on ``steps == 0`` alone gets wrong.
+
+    A blocked run at zero steps is ``budget_exhausted`` or
+    ``tool_not_allowed``: a governance decision taken, not an attempt
+    that missed. Reopening it would re-propose the task on every single
+    tick against an exhausted budget -- the loop spinning on the one
+    outcome that exists to stop it.
+    """
+    _clear_llm()
+    async with admin_session() as s:
+        a = await signup(s, email=_email(), password="pw-strong-123", org_name="BLOCKED")
+    org, user = a.org_id, a.user_id
+    async with tenant_session(str(org), str(user)) as s:
+        await _capable_agent(s, org=org, user=user, rate=Decimal(0))
+        task = await _llm_task(s, org=org, user=user, title="Budget said no")
+        agent = (
+            await s.execute(
+                select(Executor).where(
+                    Executor.kind == ExecutorKind.llm_agent, Executor.enabled.is_(True)
+                )
+            )
+        ).scalar_one()
+        now = dt.datetime.now(tz=dt.UTC)
+        s.add(
+            AgentRun(
+                org_id=org,
+                task_id=task.id,
+                executor_id=agent.id,
+                status=AgentRunStatus.blocked,
+                blocked_reason="budget_exhausted",
+                steps=0,
+                credits_spent=Decimal(0),
+                started_at=now,
+                ended_at=now,
+            )
+        )
+        await s.flush()
+
+        res = await loop.tick(s, org_id=org, actor_id=user, as_of=_AS_OF)
+        assert res.created == 0
+        assert (
+            await s.execute(
+                select(func.count())
+                .select_from(DispatchRequest)
+                .where(DispatchRequest.task_id == task.id)
+            )
+        ).scalar_one() == 0

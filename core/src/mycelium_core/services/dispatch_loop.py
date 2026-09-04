@@ -57,7 +57,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mycelium_core.errors import DomainError, NotFoundError
@@ -176,17 +176,49 @@ async def _active_run_task_ids(session: AsyncSession) -> set[uuid.UUID]:
 
 
 async def _tasks_with_any_run(session: AsyncSession) -> set[uuid.UUID]:
-    """Tasks that ALREADY have an agent run of ANY status. The loop
-    proposes a dispatch AT MOST ONCE per task: once an agent has run
-    (succeeded|failed|blocked|cancelled, or still queued|running) the
-    task is no longer auto-redispatched. The recompute still reflects
-    the completion/variance (the "reschedule" half of the loop), but
-    re-executing an agent that already produced its artifact is an
-    explicit human/owner action (a fresh approval), NEVER an automatic
-    per-tick credit burn -- that would violate the governance
-    no-silent-auto-spend guarantee and spin the loop forever on every
-    completed task."""
-    rows = (await session.execute(select(AgentRun.task_id))).scalars().all()
+    """Tasks whose agent run COUNTS as having run. The loop proposes a
+    dispatch AT MOST ONCE per task: re-executing an agent that already
+    produced its artifact is an explicit human/owner action (a fresh
+    approval), NEVER an automatic per-tick credit burn -- that would
+    violate the governance no-silent-auto-spend guarantee and spin the
+    loop forever on every completed task. The recompute still reflects
+    the completion/variance (the "reschedule" half of the loop).
+
+    The three terms say that in SQL instead of leaving it to be inferred
+    from the order of two statements in ``_drive``:
+
+    - not ``failed``: succeeded, blocked, cancelled, queued and running
+      all count. ``blocked`` especially -- a blocked run at zero steps
+      is ``budget_exhausted`` or ``tool_not_allowed``, a governance
+      decision taken, not an attempt that missed. A predicate written on
+      ``steps == 0`` alone would reopen it and re-propose the task on
+      every tick against an exhausted budget.
+    - ``steps > 0`` or ``credits_spent > 0``: a failed run that got far
+      enough to do something still counts, so nothing that spent credit
+      can come back on its own.
+
+    What drops out is exactly the run that reached no provider: failed,
+    zero steps, zero credit. That row used to remove its task from the
+    loop permanently, and nothing in this codebase deletes ``AgentRun``
+    rows, so there was no way back -- while the module docstring's stated
+    reason for the rule, "already produced its artifact", was never true
+    of it.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(AgentRun.task_id).where(
+                    or_(
+                        AgentRun.status != AgentRunStatus.failed,
+                        AgentRun.steps > 0,
+                        AgentRun.credits_spent > 0,
+                    )
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     return set(rows)
 
 
