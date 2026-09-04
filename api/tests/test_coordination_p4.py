@@ -39,6 +39,7 @@ test_f8_notifications.py (signup/deps helpers). Privileged ops send
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import uuid
 from collections.abc import Iterator, Sequence
@@ -895,3 +896,133 @@ async def test_offer_skips_deactivated_members_and_refuses_when_nobody_is_left(
     async with tenant_session(str(org), str(owner)) as s:
         untouched = await tasks_svc.get_task(s, org_id=org, task_id=t2_id)
         assert untouched.offered is False, "a refused offer must not mark the task"
+
+
+# --- C1: the award is a compare-and-swap ------------------------------
+
+
+async def _member_of(org: uuid.UUID, owner: uuid.UUID) -> uuid.UUID:
+    """A second real user holding ``member`` in the owner's workspace."""
+    async with admin_session() as s:
+        m = await signup(s, email=_email(), password="pw-strong-123", org_name="RACE-HOME")
+    async with tenant_session(str(org), str(owner)) as s:
+        s.add(Membership(org_id=org, user_id=m.user_id, role=Role.member))
+        await s.flush()
+    return m.user_id
+
+
+async def test_two_members_racing_to_claim_leave_one_winner_and_one_version_bump() -> None:
+    """The defect this fix exists for, exercised as a real race.
+
+    Both claimers pass all three pre-reads -- under READ COMMITTED
+    neither sees the other's uncommitted collaborator row or cleared
+    ``offered`` flag -- and the old code then had each write
+    ``offered = false`` and ``version += 1`` through a predicate-less
+    ORM flush. The row lock serialized those writes without detecting
+    the conflict: two winners on a contract-net award, and a version
+    counter that advanced ONCE for two logical updates, leaving every
+    later ``expected_version`` gate on that row off by one.
+
+    Two overlapping transactions, not two sequential calls: the winner
+    holds its row lock while the loser attempts the same claim, so the
+    loser's UPDATE blocks and re-evaluates its predicate against the
+    committed result. A same-transaction double call would exercise the
+    compare-and-swap but not the race, and would not have failed against
+    the old code either.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        a = (
+            await c.post(
+                "/auth/signup",
+                json={"email": _email(), "password": "pw-strong-123", "workspace_name": "RACE"},
+            )
+        ).json()
+    org = uuid.UUID(a["workspace_id"])
+    owner = uuid.UUID(decode_token(a["token"])["sub"])
+    other = await _member_of(org, owner)
+
+    async with tenant_session(str(org), str(owner)) as s:
+        task = await tasks_svc.create_task(s, org_id=org, actor_id=owner, title="Up for grabs")
+        tid = task.id
+        await coord.offer_task(s, org_id=org, actor_id=owner, task_id=tid)
+    async with tenant_session(str(org), str(owner)) as s:
+        before = (await tasks_svc.get_task(s, org_id=org, task_id=tid)).version
+
+    # The first claimer holds its lock long enough for the second to
+    # reach its own UPDATE and block there.
+    hold, stagger = 0.6, 0.15
+
+    async def _claim(user_id: uuid.UUID, start_delay: float, hold_for: float) -> str:
+        await asyncio.sleep(start_delay)
+        try:
+            async with tenant_session(str(org), str(user_id)) as s:
+                await coord.claim_task(s, org_id=org, actor_id=user_id, task_id=tid)
+                await asyncio.sleep(hold_for)
+            return "won"
+        except DomainError as exc:
+            return exc.code.value
+
+    outcomes = await asyncio.gather(
+        _claim(owner, 0.0, hold),
+        _claim(other, stagger, 0.0),
+    )
+
+    assert sorted(outcomes) == ["task.already_claimed", "won"], outcomes
+
+    async with tenant_session(str(org), str(owner)) as s:
+        winners = (
+            (
+                await s.execute(
+                    select(TaskCollaborator.user_id).where(TaskCollaborator.task_id == tid)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(winners) == 1, winners
+        row = await tasks_svc.get_task(s, org_id=org, task_id=tid)
+        assert row.offered is False
+        # One award, one increment. Two would mean the loser wrote too;
+        # zero would mean nobody did.
+        assert row.version == before + 1
+
+
+async def test_a_won_claim_returns_the_version_the_database_holds() -> None:
+    """Regression on the ORM reconciliation, which is the easy half to
+    get wrong.
+
+    The award is now a Core UPDATE that bypasses the mapper, so the
+    loaded instance still carries the pre-claim ``offered`` and
+    ``version`` while both adapters serialize their response off exactly
+    those two attributes. Re-assigning them in Python instead of
+    refreshing would look right and be a second increment.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        a = (
+            await c.post(
+                "/auth/signup",
+                json={"email": _email(), "password": "pw-strong-123", "workspace_name": "RECON"},
+            )
+        ).json()
+        owner_h = {
+            "Authorization": f"Bearer {a['token']}",
+            "X-Workspace-Id": a["workspace_id"],
+            "X-Workspace-Role": "owner",
+        }
+        org = uuid.UUID(a["workspace_id"])
+        owner = uuid.UUID(decode_token(a["token"])["sub"])
+
+        tid = (await c.post("/tasks", headers=owner_h, json={"title": "Claim me"})).json()["id"]
+        offered = (await c.post(f"/tasks/{tid}/offer", headers=owner_h)).json()
+        assert offered["offered"] is True
+
+        claimed = (await c.post(f"/tasks/{tid}/claim", headers=owner_h)).json()
+        assert claimed["offered"] is False
+        assert claimed["version"] == offered["version"] + 1
+
+    async with tenant_session(str(org), str(owner)) as s:
+        row = await tasks_svc.get_task(s, org_id=org, task_id=uuid.UUID(tid))
+        assert row.version == claimed["version"]
+        assert row.offered is False

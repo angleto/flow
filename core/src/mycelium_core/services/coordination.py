@@ -47,7 +47,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mycelium_core.errors import DomainError
@@ -605,10 +605,78 @@ async def claim_task(
         # An offered task that already has an assignee was already
         # awarded (claimed); a second claim is rejected.
         raise DomainError(MessageCode.TASK_ALREADY_CLAIMED)
+    # The award itself is a compare-and-swap on ``offered``, and the
+    # three pre-reads above stay: they are the contract (a re-offered
+    # task must still answer TASK_ALREADY_CLAIMED), not the guard.
+    #
+    # They cannot BE the guard. Two members claiming one offered task
+    # both read zero collaborator rows, both insert their own -- the PK
+    # is (task_id, user_id), so the rows coexist -- and both write
+    # ``offered = false`` with ``version = version + 1`` through a dirty
+    # ORM flush carrying no predicate. Under READ COMMITTED the row lock
+    # serializes those writes without detecting the conflict: two
+    # winners, and a counter that advanced once for two logical updates,
+    # after which every ``expected_version`` gate on that row is off by
+    # one.
+    #
+    # ``offered`` is written in exactly two places in the tree (offer to
+    # true, this one to false), so it is already a sound CAS token, and
+    # it is the right one here: ``optimistic_update`` wants an
+    # ``expected_version`` and neither adapter has one to give -- both
+    # pass task_id and the actor, nothing else.
+    #
+    # ``assignee_id`` stays untouched. It is a FK into ``identities``
+    # while ``actor_id`` here is a ``users.id``, and today "won" means
+    # "a collaborator row exists". Making the claim write the assignee
+    # would overwrite the creator's default assignment on every offered
+    # task and needs an actor identity the adapters do not pass: a
+    # decision of its own, not a side effect of a concurrency fix.
+    claimed = (
+        await session.execute(
+            update(Task)
+            .where(
+                Task.id == task_id,
+                Task.offered.is_(True),
+                Task.deleted_at.is_(None),
+            )
+            .values(offered=False, version=Task.version + 1)
+            .returning(Task.version)
+        )
+    ).first()
+    if claimed is None:
+        # Lost the race, or the row went away between the pre-read and
+        # here. One re-read with the same ``deleted_at`` filter tells
+        # which, the way ``optimistic_update`` distinguishes stale from
+        # missing: a lost race must never be reported as a task that
+        # does not exist, and a soft-delete that landed in between must
+        # never be reported as a lost race.
+        still_there = (
+            await session.execute(
+                select(Task.id).where(Task.id == task_id, Task.deleted_at.is_(None))
+            )
+        ).scalar_one_or_none()
+        if still_there is None:
+            raise DomainError(MessageCode.TASK_NOT_FOUND)
+        raise DomainError(MessageCode.TASK_ALREADY_CLAIMED)
+    # The insert is the record of the award, not the guard.
     session.add(TaskCollaborator(org_id=org_id, task_id=task_id, user_id=actor_id))
-    task.offered = False
-    task.version += 1
     await session.flush()
+    # Both adapters serialize the returned instance, and the UPDATE
+    # above left parts of it expired: it is ORM-enabled, so session
+    # synchronization expires what it wrote, and ``updated_at`` carries
+    # an onupdate on top of that.
+    #
+    # Refreshed WHOLE, and both halves of that are load-bearing.
+    # Refreshed rather than assigned, because assigning in Python would
+    # leave the instance dirty and the next flush would emit a second,
+    # predicate-less UPDATE of the very columns this compare-and-swap
+    # exists to protect. Whole rather than a named subset, because an
+    # attribute left expired loads lazily, and these are read by the
+    # adapters from synchronous code, where a lazy load on an async
+    # session raises instead of fetching -- a subset refresh of
+    # ``offered`` and ``version`` alone passes every service-level test
+    # and 500s on both HTTP claim routes.
+    await session.refresh(task)
     await notif_svc.enqueue(
         session,
         org_id=org_id,
