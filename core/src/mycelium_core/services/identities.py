@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mycelium_core.errors import DomainError, NotFoundError
 from mycelium_core.i18n import MessageCode
-from mycelium_core.models.ai_assistant import AiAssistant
+from mycelium_core.models.ai_assistant import AiAssistant, AssistantRuntime
 from mycelium_core.models.identity import Identity, IdentityKind
 from mycelium_core.models.membership import Membership
 from mycelium_core.models.user import User
@@ -136,6 +136,49 @@ async def ensure_for_ai_assistant(
             )
         ).scalar_one()
     return identity
+
+
+def is_internal_agent(kind: IdentityKind | None, runtime: AssistantRuntime | None) -> bool:
+    """Whether a task addressed to this identity may enter the llm pool.
+
+    The one place that answer is computed. Three sites decide it -- the
+    scheduler's recompute, the dispatcher's admission, and ``start_run``
+    -- and each of them used to spell it ``kind is ai_assistant``, which
+    admits an assistant this system cannot start.
+
+    Fails closed on a missing runtime. A NULL comes from an identity
+    whose ``ai_assistant_id`` is unset or whose row is gone, which is
+    not an assistant that can be driven.
+
+    The join it costs is deliberate. ``models/identity.py`` says ``kind``
+    is denormalised "so the scheduler / dispatch can read it without a
+    JOIN", and reading ``runtime`` puts one back. That is the price of
+    distinguishing two things ``kind`` conflates; denormalising
+    ``runtime`` onto ``identities`` too would be a second copy of the
+    same fact, drifting from ``ai_assistants`` the way a status column
+    there would have drifted from ``is_active``.
+    """
+    return kind == IdentityKind.ai_assistant and runtime is AssistantRuntime.internal
+
+
+async def is_internal_agent_identity(session: AsyncSession, *, ident: Identity | None) -> bool:
+    """``is_internal_agent`` for a caller holding one ``Identity``.
+
+    The two bulk sites read ``runtime`` as a column of a join they
+    already build; ``start_run`` has a single row in hand and would
+    otherwise re-derive the predicate inline, which is how the three
+    copies came to disagree in the first place.
+    """
+    if ident is None or ident.kind != IdentityKind.ai_assistant:
+        return False
+    if ident.ai_assistant_id is None:
+        return False
+    runtime = (
+        await session.execute(
+            select(AiAssistant.runtime).where(AiAssistant.id == ident.ai_assistant_id)
+        )
+    ).scalar_one_or_none()
+    return is_internal_agent(ident.kind, runtime)
 
 
 async def _subject_is_active(session: AsyncSession, *, ident: Identity) -> bool:

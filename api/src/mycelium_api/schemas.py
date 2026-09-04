@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mycelium_core.models.agent_run import AgentRunStatus
+from mycelium_core.models.ai_assistant import AssistantRuntime
 from mycelium_core.models.billing import CostBasis, RateUnit, StorageKind
 from mycelium_core.models.budget import BudgetPeriod
 from mycelium_core.models.dependency import DependencyType
@@ -3855,6 +3856,10 @@ class AiAssistantCreateIn(BaseModel):
     provider: str | None = Field(default=None, max_length=64)
     model_id: str | None = Field(default=None, max_length=128)
     notes: str | None = Field(default=None, max_length=2000)
+    # Omitted means ``external``: a credential pasted into a client that
+    # runs elsewhere, which is what this endpoint hands out. Declaring
+    # ``internal`` says the dispatch loop may drive this assistant.
+    runtime: AssistantRuntime = Field(default=AssistantRuntime.external)
 
 
 class AiAssistantPatchIn(BaseModel):
@@ -3865,6 +3870,7 @@ class AiAssistantPatchIn(BaseModel):
     model_id: str | None = Field(default=None, max_length=128)
     notes: str | None = Field(default=None, max_length=2000)
     is_active: bool | None = Field(default=None)
+    runtime: AssistantRuntime | None = Field(default=None)
 
 
 class AiAssistantOut(BaseModel):
@@ -3877,6 +3883,7 @@ class AiAssistantOut(BaseModel):
     notes: str | None
     scope: list[str]
     is_active: bool
+    runtime: AssistantRuntime
     version: int
     created_at: datetime.datetime
     updated_at: datetime.datetime

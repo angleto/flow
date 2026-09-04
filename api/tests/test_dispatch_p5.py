@@ -53,6 +53,7 @@ from mycelium_core.db import admin_session, tenant_session
 from mycelium_core.embedder import set_embedder_override
 from mycelium_core.errors import DomainError, ForbiddenError
 from mycelium_core.models.agent_run import AgentRun, AgentRunStatus
+from mycelium_core.models.ai_assistant import AssistantRuntime
 from mycelium_core.models.dispatch_request import (
     AutonomousDispatch,
     DispatchRequest,
@@ -744,3 +745,56 @@ async def test_service_level_owner_gating(_fake_embedder: None) -> None:
             expected_version=req.version,
         )
         assert out.status is DispatchStatus.denied
+
+
+async def test_tick_does_not_queue_a_task_addressed_to_an_external_assistant(
+    _fake_embedder: None,
+) -> None:
+    """The trap's entrance, closed.
+
+    ``_admitted_agent_rows`` read ``identities.kind == ai_assistant``, so
+    every task an MCP client wrote for a person queued for a run that
+    could never start: 210 requests, zero runs, all of them against the
+    one ``llm_agent`` executor, which is eligible for everything because
+    it advertises no capability tags. The requests sat harmless only
+    because the governance default is ``approval_required``; one
+    settings value flipped to ``auto`` would have approved all of them.
+
+    An ``internal`` assistant in the same tick still queues, which is
+    what separates this fix from switching the loop off.
+    """
+    async with admin_session() as s:
+        a = await signup(s, email=_email(), password="pw-strong-123", org_name="EXTQ")
+    org, user = a.org_id, a.user_id
+    async with tenant_session(str(org), str(user)) as s:
+        await _capable_agent(s, org=org, user=user)
+        ext = await seed_ai_assistant_identity(
+            s, org_id=org, user_id=user, label="ext", runtime=AssistantRuntime.external
+        )
+        internal = await seed_ai_assistant_identity(
+            s, org_id=org, user_id=user, label="int", runtime=AssistantRuntime.internal
+        )
+        ext_task = await _llm_task(s, org=org, user=user, title="For a person", assignee_id=ext.id)
+        int_task = await _llm_task(
+            s, org=org, user=user, title="For the loop", assignee_id=internal.id
+        )
+
+        res = await loop.tick(s, org_id=org, actor_id=user, as_of=_AS_OF)
+        assert res.created == 1
+
+        n_ext = (
+            await s.execute(
+                select(func.count())
+                .select_from(DispatchRequest)
+                .where(DispatchRequest.task_id == ext_task.id)
+            )
+        ).scalar_one()
+        assert n_ext == 0
+        n_int = (
+            await s.execute(
+                select(func.count())
+                .select_from(DispatchRequest)
+                .where(DispatchRequest.task_id == int_task.id)
+            )
+        ).scalar_one()
+        assert n_int == 1

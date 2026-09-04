@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mycelium_core.mcp_scopes import SCOPE_CATALOG
-from mycelium_core.models.ai_assistant import AiAssistant
+from mycelium_core.models.ai_assistant import AiAssistant, AssistantRuntime
 from mycelium_core.models.identity import Identity
 
 # A fully-capable NON-DANGER assistant (every read + every write) for tests that
@@ -38,6 +38,7 @@ async def seed_ai_assistant_identity(
     user_id: uuid.UUID,
     label: str = "agent",
     scope: Sequence[str] | None = None,
+    runtime: AssistantRuntime = AssistantRuntime.internal,
 ) -> Identity:
     """Insert an ``AiAssistant`` and return its mirrored ``Identity``.
 
@@ -59,7 +60,15 @@ async def seed_ai_assistant_identity(
     returned identity as ``assignee_id`` so the task is unambiguously
     routed to the llm_agent pool under the "default assignee = creator"
     rule (the human-only fallback would otherwise auto-assign the task
-    to the calling user)."""
+    to the calling user).
+
+    ``runtime`` defaults to ``internal``, which is the OPPOSITE of the
+    product default. That is deliberate and it is the point of the
+    parameter: the column's server default is ``external``, and an
+    external assistant is by definition not routed to the llm pool, so
+    inheriting it here would leave every existing scheduler/dispatch
+    test asserting the reverse of what it was written to assert -- and
+    passing. Tests that want the external half say so explicitly."""
     handle = f"{label}-{uuid.uuid4().hex[:8]}"
     eff_scope = list(_TEST_CAPABLE_SCOPES) if scope is None else list(scope)
     assistant = AiAssistant(
@@ -69,6 +78,7 @@ async def seed_ai_assistant_identity(
         handle=handle,
         scope=eff_scope,
         is_active=True,
+        runtime=runtime,
     )
     session.add(assistant)
     await session.flush()

@@ -29,7 +29,7 @@ from mycelium_core.errors import DomainError, NotFoundError
 from mycelium_core.i18n import MessageCode
 from mycelium_core.mcp_scopes import DEFAULT_SCOPES, VALID_SCOPE_KEYS
 from mycelium_core.models.agent_token import AgentToken
-from mycelium_core.models.ai_assistant import AiAssistant
+from mycelium_core.models.ai_assistant import AiAssistant, AssistantRuntime
 from mycelium_core.models.membership import Role
 from mycelium_core.services import actors as actors_svc
 from mycelium_core.services import agent_tokens, audit, identities
@@ -75,6 +75,7 @@ async def create_assistant(
     provider: str | None = None,
     model_id: str | None = None,
     notes: str | None = None,
+    runtime: AssistantRuntime = AssistantRuntime.external,
 ) -> AssistantWithSecret:
     """Create an assistant + its first agent_token in one atomic flush.
     Owner-gated. ``raw_secret`` returned exactly once; the operator
@@ -90,6 +91,7 @@ async def create_assistant(
         notes=notes,
         scope=eff_scope,
         is_active=True,
+        runtime=runtime,
     )
     session.add(row)
     await session.flush()
@@ -170,6 +172,7 @@ async def update_assistant(
     model_id: str | None = None,
     notes: str | None = None,
     is_active: bool | None = None,
+    runtime: AssistantRuntime | None = None,
 ) -> int:
     """Patch an assistant. Owner-gated, optimistic concurrency. The
     bound token row stays unchanged — for a secret rotation use
@@ -189,6 +192,8 @@ async def update_assistant(
         values["notes"] = notes
     if is_active is not None:
         values["is_active"] = is_active
+    if runtime is not None:
+        values["runtime"] = runtime
     if not values:
         return expected_version
     new_version = await optimistic_update(

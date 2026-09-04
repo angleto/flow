@@ -7684,6 +7684,8 @@ export interface components {
             model_id?: string | null;
             /** Notes */
             notes?: string | null;
+            /** @default external */
+            runtime?: components["schemas"]["AssistantRuntime"];
         };
         /**
          * AiAssistantCreatedOut
@@ -7719,6 +7721,7 @@ export interface components {
             scope: string[];
             /** Is Active */
             is_active: boolean;
+            runtime: components["schemas"]["AssistantRuntime"];
             /** Version */
             version: number;
             /**
@@ -7750,6 +7753,7 @@ export interface components {
             notes?: string | null;
             /** Is Active */
             is_active?: boolean | null;
+            runtime?: components["schemas"]["AssistantRuntime"] | null;
         };
         /**
          * AnnotationAppendIn
@@ -8008,6 +8012,33 @@ export interface components {
              */
             user_id: string;
         };
+        /**
+         * AssistantRuntime
+         * @description Who runs the assistant: this system, or something outside it.
+         *
+         *     ``identities.kind`` says WHAT a principal is (a user, an
+         *     ai_assistant) and one value of it has been carrying two meanings:
+         *
+         *     - ``external``: an MCP client that authenticates here and executes
+         *       elsewhere -- Claude Desktop, Cursor, a custom client. This system
+         *       cannot start it, because it does not run in this process.
+         *     - ``internal``: an assistant the dispatch loop can actually drive,
+         *       by resolving a provider and stepping it under a budget.
+         *
+         *     The distinction is not derivable from anything already stored.
+         *     ``ExecutorKind`` is ``human|llm_agent`` only and ``Executor.user_id``
+         *     is a FK to ``users``, so no row links an executor to the assistant
+         *     identity a task is addressed to: the scheduler, the dispatcher and
+         *     ``start_run`` all read ``kind == ai_assistant`` and conclude "the llm
+         *     pool owns this". A task an external client wrote for a person is
+         *     then queued for an execution that can never happen.
+         *
+         *     Lives beside the model rather than in its own module (the way
+         *     ``IndexScope`` does) because one table carries it; the module split
+         *     there exists only because two model files import that enum.
+         * @enum {string}
+         */
+        AssistantRuntime: "internal" | "external";
         /** AttachmentCapabilityIn */
         AttachmentCapabilityIn: {
             /**

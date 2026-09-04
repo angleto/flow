@@ -16,9 +16,11 @@ See migration 0059 for the SECURITY DEFINER function that joins
 
 from __future__ import annotations
 
+import enum
 import uuid
 from typing import Any
 
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -31,6 +33,35 @@ from mycelium_core.models.base import (
     UUIDPKMixin,
     VersionMixin,
 )
+
+
+class AssistantRuntime(enum.StrEnum):
+    """Who runs the assistant: this system, or something outside it.
+
+    ``identities.kind`` says WHAT a principal is (a user, an
+    ai_assistant) and one value of it has been carrying two meanings:
+
+    - ``external``: an MCP client that authenticates here and executes
+      elsewhere -- Claude Desktop, Cursor, a custom client. This system
+      cannot start it, because it does not run in this process.
+    - ``internal``: an assistant the dispatch loop can actually drive,
+      by resolving a provider and stepping it under a budget.
+
+    The distinction is not derivable from anything already stored.
+    ``ExecutorKind`` is ``human|llm_agent`` only and ``Executor.user_id``
+    is a FK to ``users``, so no row links an executor to the assistant
+    identity a task is addressed to: the scheduler, the dispatcher and
+    ``start_run`` all read ``kind == ai_assistant`` and conclude "the llm
+    pool owns this". A task an external client wrote for a person is
+    then queued for an execution that can never happen.
+
+    Lives beside the model rather than in its own module (the way
+    ``IndexScope`` does) because one table carries it; the module split
+    there exists only because two model files import that enum.
+    """
+
+    internal = "internal"
+    external = "external"
 
 
 class AiAssistant(UUIDPKMixin, OrgScopedMixin, TimestampMixin, VersionMixin, Base):
@@ -55,6 +86,16 @@ class AiAssistant(UUIDPKMixin, OrgScopedMixin, TimestampMixin, VersionMixin, Bas
     # = the assistant can call ZERO tools (deny-all default).
     scope: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
+    # Server default ``external``, and that is the decision rather than a
+    # fallback: every existing row, and every row ``create_assistant``
+    # writes, is a credential an operator pastes into a client that runs
+    # somewhere else. An ``internal`` assistant is one somebody declares.
+    runtime: Mapped[AssistantRuntime] = mapped_column(
+        SAEnum(AssistantRuntime, name="assistant_runtime", native_enum=True, create_type=False),
+        nullable=False,
+        default=AssistantRuntime.external,
+        server_default=AssistantRuntime.external.value,
+    )
 
     def scope_list(self) -> list[str]:
         """Defensive coercion: JSONB returns whatever was stored — list
@@ -68,4 +109,4 @@ class AiAssistant(UUIDPKMixin, OrgScopedMixin, TimestampMixin, VersionMixin, Bas
         return [str(x) for x in v]
 
 
-__all__ = ["AiAssistant"]
+__all__ = ["AiAssistant", "AssistantRuntime"]

@@ -36,10 +36,11 @@ from tests_helpers import seed_ai_assistant_identity
 from mycelium_api.main import app
 from mycelium_core.db import admin_session, tenant_session
 from mycelium_core.errors import ConflictError, DomainError, ForbiddenError
-from mycelium_core.models.ai_assistant import AiAssistant
+from mycelium_core.models.ai_assistant import AiAssistant, AssistantRuntime
 from mycelium_core.models.executor import Executor, ExecutorKind
 from mycelium_core.models.schedule import Schedule
 from mycelium_core.models.task import ExecKind, SchedulePolicy
+from mycelium_core.models.task_collaborator import TaskCollaborator
 from mycelium_core.services import executors as exec_svc
 from mycelium_core.services import scheduler as sch
 from mycelium_core.services import tasks
@@ -769,3 +770,171 @@ async def test_a_task_addressed_to_a_deactivated_assistant_is_a_visible_gap() ->
         run = await c.post(f"/tasks/{task_id}/run", headers=h)
         assert run.status_code == 400, run.text
         assert run.json()["code"] == "agent_run.assignee_inactive"
+
+
+async def test_an_external_assistant_task_stays_out_of_the_llm_pool() -> None:
+    """The one-way trap, closed at the routing site.
+
+    An MCP client that creates a task is auto-assigned it, and until
+    ``ai_assistants.runtime`` existed the recompute read
+    ``identities.kind == ai_assistant`` and put that task in the llm
+    pool: an executor, a projected cost and a scheduled window, for an
+    execution nothing on this side can start. The live queue held 210
+    requests against zero runs.
+
+    ``external`` routes the task like a human's, and with no human
+    assignee that means off-timeline: no executor, no cost, no window,
+    and not ``unassignable`` either, because nothing failed to be
+    admitted -- it was never a candidate.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        a = (
+            await c.post(
+                "/auth/signup",
+                json={"email": _email(), "password": "pw-strong-123", "workspace_name": "EXT"},
+            )
+        ).json()
+        h = {
+            "Authorization": f"Bearer {a['token']}",
+            "X-Workspace-Id": a["workspace_id"],
+            "X-Workspace-Role": "owner",
+        }
+        org_id = uuid.UUID(a["workspace_id"])
+        async with tenant_session(str(org_id), a["user_id"]) as s:
+            ext = await seed_ai_assistant_identity(
+                s,
+                org_id=org_id,
+                user_id=uuid.UUID(a["user_id"]),
+                label="external-client",
+                runtime=AssistantRuntime.external,
+            )
+            internal = await seed_ai_assistant_identity(
+                s,
+                org_id=org_id,
+                user_id=uuid.UUID(a["user_id"]),
+                label="internal-agent",
+                runtime=AssistantRuntime.internal,
+            )
+
+        ext_task = (
+            await c.post(
+                "/tasks",
+                headers=h,
+                json={
+                    "title": "Wrote it for a person",
+                    "estimate_effort_h": "2",
+                    "assignee_id": str(ext.id),
+                },
+            )
+        ).json()["id"]
+        int_task = (
+            await c.post(
+                "/tasks",
+                headers=h,
+                json={
+                    "title": "Agent work",
+                    "estimate_effort_h": "2",
+                    "assignee_id": str(internal.id),
+                },
+            )
+        ).json()["id"]
+
+        rec = await c.post(
+            "/schedule/recompute",
+            headers=h,
+            json={"as_of": "2026-01-12T08:00:00+00:00", "policy": "balanced"},
+        )
+        assert rec.status_code == 200, rec.text
+        assert rec.json()["unassignable_count"] == 0
+
+        sched = (await c.get("/schedule", headers=h)).json()
+        ext_row = next(x for x in sched if x["task_id"] == ext_task)
+        assert ext_row["assigned_executor_id"] is None
+        assert Decimal(str(ext_row["projected_cost"])) == Decimal(0)
+        assert ext_row["unassignable"] is False
+        # ``scheduled_start`` is NOT null here, and asserting that it was
+        # is the mistake this line exists to prevent. An off-timeline
+        # node still gets its logical CPM window written through
+        # (``sched[id] = (es, ef)``); NULL is reserved for an
+        # unassignable row, which is a dispatch gap and a different
+        # thing. What says "not in the llm pool" is the absent executor
+        # and the zero cost, above.
+        assert ext_row["scheduled_start"] == ext_row["es"]
+
+        # The symmetric half, and the reason it is in the same test:
+        # disabling the loop outright would satisfy every assertion
+        # above. An internal assistant must still be routed.
+        int_row = next(x for x in sched if x["task_id"] == int_task)
+        assert int_row["assigned_executor_id"] is not None
+        assert int_row["scheduled_start"] is not None
+
+
+async def test_an_external_assistant_task_with_a_collaborator_is_that_persons_work() -> None:
+    """The branch the routing change does not make off-timeline.
+
+    ``_Node.assignee`` falls back to the first ``task_assignee`` row
+    before the identity-resolved user, so an external-assistant task
+    that also names a person is serialized on that person's calendar
+    rather than dropped. That is the right answer -- it is planned human
+    work -- but it is a different outcome from the test above, so it is
+    asserted rather than discovered.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
+        a = (
+            await c.post(
+                "/auth/signup",
+                json={"email": _email(), "password": "pw-strong-123", "workspace_name": "EXTC"},
+            )
+        ).json()
+        h = {
+            "Authorization": f"Bearer {a['token']}",
+            "X-Workspace-Id": a["workspace_id"],
+            "X-Workspace-Role": "owner",
+        }
+        org_id = uuid.UUID(a["workspace_id"])
+        user_id = uuid.UUID(a["user_id"])
+        async with tenant_session(str(org_id), a["user_id"]) as s:
+            ext = await seed_ai_assistant_identity(
+                s,
+                org_id=org_id,
+                user_id=user_id,
+                label="external-client",
+                runtime=AssistantRuntime.external,
+            )
+
+        task_id = (
+            await c.post(
+                "/tasks",
+                headers=h,
+                json={
+                    "title": "Drafted for Ada",
+                    "estimate_effort_h": "2",
+                    "assignee_id": str(ext.id),
+                },
+            )
+        ).json()["id"]
+
+        async with tenant_session(str(org_id), a["user_id"]) as s:
+            s.add(
+                TaskCollaborator(
+                    org_id=org_id,
+                    task_id=uuid.UUID(task_id),
+                    user_id=user_id,
+                )
+            )
+
+        rec = await c.post(
+            "/schedule/recompute",
+            headers=h,
+            json={"as_of": "2026-01-12T08:00:00+00:00", "policy": "balanced"},
+        )
+        assert rec.status_code == 200, rec.text
+        sched = (await c.get("/schedule", headers=h)).json()
+        row = next(x for x in sched if x["task_id"] == task_id)
+        # On the person's timeline, and still not an llm dispatch.
+        assert row["scheduled_start"] is not None
+        assert row["assigned_executor_id"] is None
+        assert Decimal(str(row["projected_cost"])) == Decimal(0)
+        assert row["unassignable"] is False

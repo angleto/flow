@@ -58,7 +58,7 @@ from mycelium_core.i18n import MessageCode
 from mycelium_core.models.agent_run import AgentRun, AgentRunStatus
 from mycelium_core.models.billing import CostBasis
 from mycelium_core.models.executor import Executor
-from mycelium_core.models.identity import Identity, IdentityKind
+from mycelium_core.models.identity import Identity
 from mycelium_core.models.membership import Role
 from mycelium_core.models.note import Note
 from mycelium_core.models.schedule import Schedule
@@ -422,14 +422,20 @@ async def start_run(
     if task is None:
         raise NotFoundError(MessageCode.AGENT_RUN_NOT_FOUND)
     # docs/adr/0028: a task is dispatchable to an agent run iff its
-    # assignee identity is an ai_assistant, OR (unassigned) the
-    # ``executor_kind`` hint is ``llm_agent`` (a llm task that has
-    # not been bound to a specific assistant yet).
+    # assignee identity is an ai_assistant this system can run, OR
+    # (unassigned) the ``executor_kind`` hint is ``llm_agent`` (a llm
+    # task that has not been bound to a specific assistant yet).
+    #
+    # Checked here and not only in the dispatch loop, because two of the
+    # three callers never go through it: MCP ``agent_run_start`` and
+    # POST /tasks/{task_id}/run reach this function directly. And the
+    # executor guard below does not stand in for it -- ``_assigned_executor``
+    # reads back whatever the scheduler assigned, so it finds a row.
     if task.assignee_id is not None:
         identity = (
             await session.execute(select(Identity).where(Identity.id == task.assignee_id))
         ).scalar_one_or_none()
-        is_llm = identity is not None and identity.kind is IdentityKind.ai_assistant
+        is_llm = await identities_svc.is_internal_agent_identity(session, ident=identity)
         # Live re-check on top of the scheduler snapshot, the same
         # defense-in-depth the dispatch loop applies to WIP: the schedule
         # row that flags ``assignee_inactive`` is only as fresh as the

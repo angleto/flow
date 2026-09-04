@@ -332,15 +332,26 @@ async def create_task(
     # explicit value distinct from the creator.
     if assignee_id is None and created_by_identity_id is not None:
         assignee_id = created_by_identity_id
-        # Align ``executor_kind`` with the resolved identity's kind so
-        # the persisted routing hint stays coherent with the assignee.
-        creator_kind = (
-            await session.execute(
-                select(Identity.kind).where(Identity.id == created_by_identity_id)
-            )
+        # Align ``executor_kind`` with the resolved identity so the
+        # persisted routing hint stays coherent with the assignee. An
+        # assistant that runs OUTSIDE this system gets ``human``: the
+        # hint answers "which pool routes this if nobody is assigned",
+        # and nothing here can start such an assistant.
+        #
+        # This line closes nothing on its own. ``assignee_id`` is set
+        # two lines above and is never NULL on this path, so the hint
+        # is not read for these tasks at all (ADR-0028: when an
+        # assignee is set the kind comes from the joined identity).
+        # The trap is closed at the three sites that read the identity.
+        creator = (
+            await session.execute(select(Identity).where(Identity.id == created_by_identity_id))
         ).scalar_one_or_none()
+        creator_kind = creator.kind if creator is not None else None
         if creator_kind == IdentityKind.ai_assistant:
-            executor_kind = ExecKind.llm_agent
+            if await identities_svc.is_internal_agent_identity(session, ident=creator):
+                executor_kind = ExecKind.llm_agent
+            else:
+                executor_kind = ExecKind.human
         elif creator_kind == IdentityKind.user:
             executor_kind = ExecKind.human
     # docs/adr/0028: ``executor_kind`` is the routing hint used only

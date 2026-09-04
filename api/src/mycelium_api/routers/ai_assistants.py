@@ -94,6 +94,7 @@ def _out(a: AiAssistant, token_prefix: str | None) -> AiAssistantOut:
         notes=a.notes,
         scope=a.scope_list(),
         is_active=a.is_active,
+        runtime=a.runtime,
         version=a.version,
         created_at=a.created_at,
         updated_at=a.updated_at,
@@ -127,6 +128,7 @@ async def create_assistant(
         provider=body.provider,
         model_id=body.model_id,
         notes=body.notes,
+        runtime=body.runtime,
     )
     return AiAssistantCreatedOut(
         assistant=_out(res.assistant, res.token_prefix),
@@ -166,6 +168,7 @@ async def patch_assistant(
         model_id=body.model_id,
         notes=body.notes,
         is_active=body.is_active,
+        runtime=body.runtime,
     )
     row = await svc.get_assistant(
         ctx.session,

@@ -63,6 +63,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mycelium_core.errors import DomainError, NotFoundError
 from mycelium_core.i18n import MessageCode
 from mycelium_core.models.agent_run import AgentRun, AgentRunStatus
+from mycelium_core.models.ai_assistant import AiAssistant, AssistantRuntime
 from mycelium_core.models.dispatch_request import (
     ACTIVE_DISPATCH_STATUSES,
     DEFAULT_AUTONOMOUS_DISPATCH,
@@ -78,6 +79,7 @@ from mycelium_core.models.schedule import Schedule
 from mycelium_core.models.task import ExecKind, SchedulePolicy, Task
 from mycelium_core.services import agent_runtime as agent_runtime_svc
 from mycelium_core.services import audit
+from mycelium_core.services import identities as identities_svc
 from mycelium_core.services import scheduler as scheduler_svc
 from mycelium_core.services.rbac import require_role
 
@@ -243,9 +245,10 @@ async def _admitted_agent_rows(
     # picks tasks routed to the llm_agent pool either way.
     rows = (
         await session.execute(
-            select(Schedule, Task, Identity.kind)
+            select(Schedule, Task, Identity.kind, AiAssistant.runtime)
             .join(Task, Task.id == Schedule.task_id)
             .outerjoin(Identity, Identity.id == Task.assignee_id)
+            .outerjoin(AiAssistant, AiAssistant.id == Identity.ai_assistant_id)
             .where(
                 Schedule.unassignable.is_(False),
                 Schedule.assigned_executor_id.is_not(None),
@@ -255,12 +258,17 @@ async def _admitted_agent_rows(
         )
     ).all()
 
-    def _is_agent(task: Task, ikind: IdentityKind | None) -> bool:
+    def _is_agent(task: Task, ikind: IdentityKind | None, runtime: AssistantRuntime | None) -> bool:
         if ikind is not None:
-            return ikind == IdentityKind.ai_assistant
+            return identities_svc.is_internal_agent(ikind, runtime)
+        # No assignee: the persisted routing hint decides (docs/adr/0028).
+        # There is no assistant row to ask, so ``runtime`` says nothing
+        # here and this branch is unchanged.
         return task.executor_kind is ExecKind.llm_agent
 
-    agent_rows = [(sch, task) for sch, task, ikind in rows if _is_agent(task, ikind)]
+    agent_rows = [
+        (sch, task) for sch, task, ikind, runtime in rows if _is_agent(task, ikind, runtime)
+    ]
     _far = dt.datetime.max.replace(tzinfo=dt.UTC)
     agent_rows.sort(key=lambda st: (st[0].scheduled_start or _far, str(st[1].id)))
     return agent_rows

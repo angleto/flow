@@ -44,7 +44,7 @@ from mycelium_core.i18n import MessageCode
 from mycelium_core.models.ai_assistant import AiAssistant
 from mycelium_core.models.dependency import DependencyType, TaskDependency
 from mycelium_core.models.executor import Executor, ExecutorKind
-from mycelium_core.models.identity import Identity, IdentityKind
+from mycelium_core.models.identity import Identity
 from mycelium_core.models.membership import Role
 from mycelium_core.models.schedule import Schedule
 from mycelium_core.models.task import ExecKind, ScheduleMode, SchedulePolicy, Task
@@ -54,6 +54,7 @@ from mycelium_core.models.task_tag import TaskTag
 from mycelium_core.models.workflow import WorkflowState
 from mycelium_core.services import audit
 from mycelium_core.services import executors as executors_svc
+from mycelium_core.services import identities as identities_svc
 from mycelium_core.services.calendar import WorkCalendar, build_work_calendar
 from mycelium_core.services.rbac import require_role
 
@@ -323,6 +324,7 @@ class Scheduler:
                     Identity.kind,
                     Identity.user_id,
                     AiAssistant.is_active,
+                    AiAssistant.runtime,
                 )
                 .join(Identity, Identity.id == Task.assignee_id)
                 .outerjoin(AiAssistant, AiAssistant.id == Identity.ai_assistant_id)
@@ -336,13 +338,23 @@ class Scheduler:
         # routing: an excluded task would keep a schedule row claiming it
         # is planned and on time while nothing ever dispatches it.
         self._assignee_inactive: set[uuid.UUID] = set()
-        for tid, ikind, iuser, a_active in identity_rows:
-            if ikind == IdentityKind.ai_assistant:
+        for tid, ikind, iuser, a_active, a_runtime in identity_rows:
+            if identities_svc.is_internal_agent(ikind, a_runtime):
                 task_kind[tid] = ExecKind.llm_agent
                 task_human_user[tid] = None
                 if a_active is not True:
                     self._assignee_inactive.add(tid)
             else:
+                # An EXTERNAL assistant lands here with the humans, and
+                # its ``task_human_user`` stays NULL: nothing on this
+                # side of the system starts it, so it gets no executor,
+                # no projected cost and no scheduled window, and
+                # ``_admitted_agent_rows`` never sees it because that
+                # query requires ``assigned_executor_id IS NOT NULL``.
+                # Off-calendar rather than mis-scheduled -- unless a
+                # task_assignee row names a person, in which case the
+                # task is that person's planned work and belongs on
+                # their calendar.
                 task_kind[tid] = ExecKind.human
                 task_human_user[tid] = iuser
 

@@ -40,7 +40,7 @@ from decimal import Decimal
 import pytest
 from _fake_embedder import FakeEmbedder
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from tests_helpers import seed_ai_assistant_identity
 
@@ -50,7 +50,9 @@ from mycelium_core.db import admin_session, tenant_session
 from mycelium_core.embedder import set_embedder_override
 from mycelium_core.errors import DomainError, ForbiddenError, NotFoundError
 from mycelium_core.models.agent_run import AgentRun, AgentRunStatus
+from mycelium_core.models.ai_assistant import AiAssistant, AssistantRuntime
 from mycelium_core.models.executor import Executor, ExecutorKind
+from mycelium_core.models.identity import Identity
 from mycelium_core.models.note import Note
 from mycelium_core.models.schedule import Schedule
 from mycelium_core.services import agent_runtime as runtime
@@ -738,3 +740,67 @@ async def test_cross_org_isolation(_fake_embedder: None) -> None:
         # B's run list does not include A's run.
         rows = await runtime.list_runs(s, org_id=org_b)
         assert all(r.id != run_a_id for r in rows)
+
+
+async def test_start_run_refuses_an_external_assistant_on_its_own(_fake_embedder: None) -> None:
+    """The door ``start_run`` has to close by itself.
+
+    Two of its three callers -- MCP ``agent_run_start`` and
+    POST /tasks/{id}/run -- never pass through the dispatch loop, so the
+    loop's admission is not this function's guarantee. Neither is the
+    executor guard below it: ``_assigned_executor`` reads back whatever
+    the last recompute assigned, so it finds a row and the run proceeds.
+
+    Assigned while the assistant was ``internal``, flipped afterwards.
+    Same shape as the ``assignee_inactive`` live re-check: the schedule
+    row is only as fresh as the last recompute, and the refusal has to
+    come from the identity, not from the snapshot. That is also why the
+    schedule is deliberately NOT recomputed after the flip -- a recompute
+    would drop the executor and the test would then pass on the wrong
+    guard.
+    """
+    async with admin_session() as s:
+        a = await signup(s, email=_email(), password="pw-strong-123", org_name="EXTR")
+    org, user = a.org_id, a.user_id
+
+    async with tenant_session(str(org), str(user)) as s:
+        task, executor = await _dispatched_llm_task(s, org=org, user=user)
+        ident = (
+            await s.execute(select(Identity).where(Identity.id == task.assignee_id))
+        ).scalar_one()
+        await s.execute(
+            update(AiAssistant)
+            .where(AiAssistant.id == ident.ai_assistant_id)
+            .values(runtime=AssistantRuntime.external)
+        )
+
+        # The schedule still says dispatchable; the identity says no.
+        row = (await s.execute(select(Schedule).where(Schedule.task_id == task.id))).scalar_one()
+        assert row.assigned_executor_id == executor.id and row.unassignable is False
+
+        with pytest.raises(DomainError) as ei:
+            await runtime.start_run(s, org_id=org, actor_id=user, task_id=task.id)
+        assert ei.value.code.value == "agent_run.not_dispatchable"
+
+        # And it refuses BEFORE the row is written: the run row is
+        # flushed ahead of the provider call, and a phantom run excludes
+        # the task from every later tick (``_tasks_with_any_run`` has no
+        # status predicate at all).
+        n_runs = (
+            await s.execute(
+                select(func.count()).select_from(AgentRun).where(AgentRun.task_id == task.id)
+            )
+        ).scalar_one()
+        assert n_runs == 0
+
+        # Symmetric: flipped back, the same task runs. Without this the
+        # test passes against a ``start_run`` that refuses everything.
+        await s.execute(
+            update(AiAssistant)
+            .where(AiAssistant.id == ident.ai_assistant_id)
+            .values(runtime=AssistantRuntime.internal)
+        )
+        _use_llm(['{"tool": "finish", "args": {"output": "ok"}}'])
+        run = await runtime.start_run(s, org_id=org, actor_id=user, task_id=task.id)
+        _clear_llm()
+        assert run.status is AgentRunStatus.succeeded
