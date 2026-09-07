@@ -13,6 +13,13 @@ from dataclasses import dataclass
 
 import pytest
 
+from mycelium_core.services.memory import (
+    _HUMUS_RRF_BOOST,
+    _LEXICAL_EXACT_WEIGHT,
+    _LEXICAL_STEM_WEIGHT,
+    _RRF_K,
+    _SEMANTIC_RRF_WEIGHT,
+)
 from mycelium_core.services.retrieval import (
     Candidate,
     RetrievalContext,
@@ -336,3 +343,81 @@ async def test_weighted_rrf_lexical_beats_semantic_only() -> None:
     assert by_id[sem_only.blob_id] == pytest.approx(0.3 / 61)
     assert by_id[both.blob_id] == pytest.approx(1.0 / 61 + 0.3 / 61)
     assert by_id[lex_only.blob_id] > by_id[sem_only.blob_id]
+
+
+# --------------------------------------------------------------- production weights
+#
+# The tests above fuse with illustrative weights (1.0/0.3). Nothing pinned the
+# table the system actually ships, and that table decides every score any
+# caller sees: a change to it is invisible in review and silent in production.
+
+
+def _production_fusion() -> RRFFusionStage:
+    """The fusion exactly as ``memory.retrieve`` assembles it."""
+    return RRFFusionStage(
+        k=_RRF_K,
+        weights={
+            "lexical_exact": _LEXICAL_EXACT_WEIGHT,
+            "lexical_stem": _LEXICAL_STEM_WEIGHT,
+            "semantic": _SEMANTIC_RRF_WEIGHT,
+            "semantic_hosted": _SEMANTIC_RRF_WEIGHT,
+            "humus": _HUMUS_RRF_BOOST,
+        },
+    )
+
+
+def test_production_weight_table_has_not_moved() -> None:
+    """The literals, on purpose. An accidental edit fails here; a deliberate
+    one has to come through this line, which is the prompt to run ``make eval``
+    and say what moved."""
+    assert _RRF_K == 60
+    assert _LEXICAL_EXACT_WEIGHT == 1.0
+    assert _LEXICAL_STEM_WEIGHT == 0.2
+    assert _SEMANTIC_RRF_WEIGHT == 0.2
+    assert _HUMUS_RRF_BOOST == 0.2
+
+
+async def test_fused_score_is_exactly_the_weighted_rank_sum() -> None:
+    """Reproduces two values observed live against the deployed server on
+    2026-09-07, from the branch ranks alone: 0.02289793759915389 for a hit
+    the exact-lexical branch found at rank 1 (plus stem at 2, semantic at 1),
+    and 0.003278688524590164 for a hit only the dense branch reached at
+    rank 1. An operator reading the second as 'weak match' is reading a
+    weight divided by a rank."""
+    three_branch = Candidate(
+        blob_id=uuid.uuid4(),
+        scores_by_stage={"lexical_exact": 1.0, "lexical_stem": 2.0, "semantic": 1.0},
+    )
+    dense_only = Candidate(blob_id=uuid.uuid4(), scores_by_stage={"semantic": 1.0})
+    out = await _production_fusion().run("q", _ctx_stub(), [three_branch, dense_only])
+    by_id = {c.blob_id: c for c in out}
+
+    assert by_id[three_branch.blob_id].score == pytest.approx(0.02289793759915389)
+    assert by_id[dense_only.blob_id].score == pytest.approx(0.003278688524590164)
+    # The fused value is also republished under "rrf", which is what a caller
+    # reading scores_by_stage compares its branch ranks against.
+    assert by_id[dense_only.blob_id].scores_by_stage["rrf"] == pytest.approx(
+        by_id[dense_only.blob_id].score
+    )
+
+
+async def test_dense_only_score_is_a_function_of_rank_and_nothing_else() -> None:
+    """The finding this breakdown exists to make visible. RRF fuses by RANK,
+    so the cosine is discarded once the ordering is decided: a dense-only hit
+    scores 0.2/(60+rank) whether its cosine was 0.63 or 0.36. Two consequences
+    a caller must not get wrong: the fused score is not a confidence, and a
+    flat page of 0.0033 values is not evidence that the embedder did badly.
+    There is deliberately no cosine anywhere in this test, because there is
+    none anywhere in the fusion."""
+    ranks = [float(r) for r in range(1, 11)]
+    cands = [Candidate(blob_id=uuid.uuid4(), scores_by_stage={"semantic": r}) for r in ranks]
+    out = await _production_fusion().run("q", _ctx_stub(), cands)
+    by_id = {c.blob_id: c.score for c in out}
+    for c, r in zip(cands, ranks, strict=True):
+        assert by_id[c.blob_id] == pytest.approx(_SEMANTIC_RRF_WEIGHT / (_RRF_K + r))
+    # Top to bottom of a ten-row page the spread is 70/61, under 15%, whatever
+    # the cosines were: too flat to rank on, which is why an honest abstention
+    # needs the cross-encoder logit and not this number.
+    values = sorted(by_id.values(), reverse=True)
+    assert values[0] / values[-1] == pytest.approx(70 / 61)
+    assert values[0] / values[-1] < 1.15

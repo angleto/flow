@@ -82,6 +82,7 @@ async def search(
             snippet=h.snippet,
             score=h.score,
             tags=_tags(h),
+            scores_by_stage=h.scores_by_stage,
         )
         for h in hits
     ]

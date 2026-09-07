@@ -3955,7 +3955,16 @@ class SearchHit(BaseModel):
     no entity to carry them. The field was declared here and never
     filled, so a caller wanting to badge a result with its project had
     exactly one option: a fetch per row, turning a twenty-row page into
-    twenty-one requests."""
+    twenty-one requests.
+
+    ``scores_by_stage`` says WHY the row ranked where it did. Its
+    per-branch entries are 1-based RANKS (lexical_exact / lexical_stem /
+    semantic / semantic_hosted / humus), not scores; only ``rrf`` is a
+    score, and it is the same number as ``score``. The fused value alone
+    cannot separate a hit the lexical branch found from one only the
+    dense branch reached, because RRF fuses by rank: a dense-only hit
+    scores exactly ``0.2/(60+rank)`` whatever its cosine was. Empty on
+    the entity-code path, where nothing was ranked."""
 
     kind: str  # 'task' | 'note' | 'blob'
     task_id: uuid.UUID | None = None
@@ -3966,6 +3975,7 @@ class SearchHit(BaseModel):
     snippet: str | None = None
     score: float
     tags: list[TagBrief] = Field(default_factory=list)
+    scores_by_stage: dict[str, float] = Field(default_factory=dict)
 
 
 class SearchClickIn(BaseModel):

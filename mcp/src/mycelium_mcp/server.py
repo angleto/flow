@@ -4863,6 +4863,15 @@ async def search(
                     "title": h.title,
                     "snippet": h.snippet,
                     "score": h.score,
+                    # Why this hit ranked here, same shape `memory_search`
+                    # returns. Branch entries are 1-BASED RANKS, not
+                    # scores; only "rrf" is a score and it equals "score"
+                    # above. The fused value alone cannot tell a lexical
+                    # hit from a dense-only one: RRF fuses by rank, so a
+                    # dense-only hit is exactly 0.2/(60+rank) whatever its
+                    # cosine was. Empty on the entity-code path, where
+                    # nothing was ranked.
+                    "scores_by_stage": h.scores_by_stage,
                 }
                 for h in page
             ],

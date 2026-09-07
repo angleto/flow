@@ -59,7 +59,7 @@ import datetime as dt
 import hashlib
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, event, select, update
@@ -599,6 +599,20 @@ class UnifiedHit:
     model_id: str | None = None
     note_id: uuid.UUID | None = None
     part_id: uuid.UUID | None = None
+    # Why this hit ranked here, carried through from ``memory.Hit``: the
+    # per-branch entries are 1-BASED RANKS (lexical_exact / lexical_stem /
+    # semantic / semantic_hosted / humus), not scores, and only ``rrf`` is a
+    # score -- ``score`` above is that same fused value. Without the
+    # breakdown a caller cannot tell a hit the lexical branch found from one
+    # only the dense branch reached, and the fused number cannot tell them
+    # apart either: RRF fuses by rank, so every dense-only hit scores exactly
+    # ``0.2/(60+rank)`` whatever its cosine was. ``memory_search`` has
+    # surfaced this from the start; the unified search dropped it here.
+    # If the cross-encoder ran, it also carries ``rerank``: that one IS a
+    # score, the raw logit, on a different scale, and ``score`` above is then
+    # the logit rather than the fused RRF (see ``stages/rerank.py``).
+    # Empty when no ranked retrieval ran at all, as on the entity-code path.
+    scores_by_stage: dict[str, float] = field(default_factory=dict)
 
 
 def _aggregate_unified_meta(metas: list[RetrievalMeta], final: list[UnifiedHit]) -> RetrievalMeta:
@@ -755,6 +769,7 @@ async def search_unified_with_meta(
                         title=meta.title,
                         snippet=snippets.get(h.blob.id),
                         score=h.rrf,
+                        scores_by_stage=dict(h.scores_by_stage),
                         scope=task_hit_scope,
                         model_id=h.blob.model_id,
                     )
@@ -813,6 +828,7 @@ async def search_unified_with_meta(
                         title=note_m.title,
                         snippet=snippets.get(h.blob.id),
                         score=h.rrf,
+                        scores_by_stage=dict(h.scores_by_stage),
                         scope="project" if project_id is not None else "org",
                         model_id=h.blob.model_id,
                     )
@@ -859,6 +875,7 @@ async def search_unified_with_meta(
                         title=None,
                         snippet=snippets.get(h.blob.id),
                         score=h.rrf,
+                        scores_by_stage=dict(h.scores_by_stage),
                         scope="project" if project_id is not None else "org",
                         model_id=h.blob.model_id,
                     )
@@ -984,6 +1001,11 @@ async def _entity_code_matches(
         # Preserve the resolver's deliberate order (tasks first, then most
         # recently updated) through the score sort below, which would
         # otherwise re-break ties on kind and blob id.
+        #
+        # ``scores_by_stage`` stays empty on this path and that is the
+        # honest answer, not an omission: nothing was ranked. An entity
+        # code is an exact lookup, so there are no branches to report and
+        # ``score`` is a position marker rather than a relevance value.
         score = 1.0 - i * 1e-6
         if m.kind == "task":
             bid = task_blob.get(m.id)
