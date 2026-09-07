@@ -121,10 +121,16 @@ async def migration_status_(
     ctx: Annotated[TenantCtx, Depends(tenant_ctx, scope="function")],
 ) -> dict[str, int]:
     """Embedding backfill coverage for this workspace (task 5276207e):
-    {total, migrated, pending, hosted}. ``total`` is blobs with non-NULL
-    text; ``migrated`` is blobs with the always-on LOCAL vector; ``hosted``
-    is blobs with the optional hosted vector; ``pending`` is the local
-    backfill's TODO."""
+    {total, migrated, pending, hosted, stale}. ``total`` is blobs with
+    non-NULL text; ``migrated`` is blobs with the always-on LOCAL vector;
+    ``hosted`` is blobs with the optional hosted vector; ``pending`` is the
+    local backfill's TODO.
+
+    ``stale`` is blobs that HAVE a local vector written by a model that is
+    no longer the active one. They are counted in ``migrated`` too, because
+    they are embedded; the number answers a different question, which is
+    whether the dense branch is ignoring part of a corpus that reports
+    itself fully migrated. It falls to zero as the sweep converges."""
     from mycelium_core.services import embedding_migration as svc
 
     return await svc.migration_status(ctx.session)

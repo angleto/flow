@@ -115,6 +115,14 @@ class SemanticDenseStage(Stage):
                     MemoryBlob.org_id == ctx.org_id,
                     ctx.project_pred,
                     MemoryBlob.embedding_hosted.is_not(None),
+                    # Only rows in the SAME vector space as the query. Vectors from
+                    # different models are not comparable (ADR-0030), and without this the
+                    # kNN silently ranks them against each other: a row embedded before a
+                    # model swap scores as a neighbour of a query it has no relation to,
+                    # and nothing in the response says so. The column carries one model at
+                    # a time by design and the backfill converges it, but a corpus mid-swap
+                    # holds both, and mid-swap is exactly when this must not lie.
+                    MemoryBlob.model_id_hosted == hosted.model_id,
                     *ctx.tag_clauses,
                 )
                 .order_by(dist_hosted, MemoryBlob.id)
@@ -138,6 +146,8 @@ class SemanticDenseStage(Stage):
                     MemoryBlob.org_id == ctx.org_id,
                     ctx.project_pred,
                     MemoryBlob.embedding.is_not(None),
+                    # Same space as the query; see the hosted branch above.
+                    MemoryBlob.model_id == local.model_id,
                     *ctx.tag_clauses,
                 )
                 .order_by(dist_local, MemoryBlob.id)

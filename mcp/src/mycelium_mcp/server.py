@@ -5001,12 +5001,23 @@ async def memory_recompute_tiers(
 @mcp.tool()
 async def memory_migration_status(token: str, org_id: str) -> dict[str, int]:
     """Embedding-backfill coverage for the workspace: ``{total, migrated,
-    pending, hosted}``. ``total`` = memory blobs with text; ``migrated`` =
-    those that already have a local dense vector; ``pending`` = local-tier
-    backfill still to do (rows written keyword-only, ``model_id='none'``);
-    ``hosted`` = blobs that also have the optional per-org hosted vector.
+    pending, hosted, stale}``. ``total`` = memory blobs with text;
+    ``migrated`` = those that already have a local dense vector;
+    ``pending`` = local-tier backfill still to do (rows written
+    keyword-only, ``model_id='none'``); ``hosted`` = blobs that also have
+    the optional per-org hosted vector.
+
+    ``stale`` = blobs that HAVE a local vector, written by a model that is
+    no longer the active one. They are counted in ``migrated`` as well,
+    because they are embedded; this answers the different question of
+    whether the dense branch is ignoring part of a corpus that reports
+    itself fully migrated. Vectors from different models are not
+    comparable, so those rows are excluded from the dense kNN until the
+    sweep re-embeds them, and the number falls to zero as it converges.
+
     Member-level, read-only. Pair with ``memory_migrate`` to drain
-    ``pending`` to 0 and re-enable semantic recall over the back-catalogue."""
+    ``pending`` and ``stale`` to 0 and re-enable semantic recall over the
+    back-catalogue."""
     async with _tenant(token, org_id) as (s, _org, _user):
         return await embedding_svc.migration_status(s)
 
