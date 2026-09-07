@@ -3964,7 +3964,14 @@ class SearchHit(BaseModel):
     cannot separate a hit the lexical branch found from one only the
     dense branch reached, because RRF fuses by rank: a dense-only hit
     scores exactly ``0.2/(60+rank)`` whatever its cosine was. Empty on
-    the entity-code path, where nothing was ranked."""
+    the entity-code path, where nothing was ranked.
+
+    ``scope`` says which boundary the row was retrieved under, ``org`` or ``project``, and
+    ``model_id`` is the backing blob's embedding model, where ``none`` means the row is
+    keyword-only and carries no dense vector. Both had been on the MCP surface for some time
+    and on this one not at all, although the two run the same function: a REST caller could
+    not tell a project-scoped hit from an org-wide one, nor a row that rode FTS alone from one
+    the dense branch found."""
 
     kind: str  # 'task' | 'note' | 'blob'
     task_id: uuid.UUID | None = None
@@ -3976,6 +3983,8 @@ class SearchHit(BaseModel):
     score: float
     tags: list[TagBrief] = Field(default_factory=list)
     scores_by_stage: dict[str, float] = Field(default_factory=dict)
+    scope: str = "org"
+    model_id: str | None = None
 
 
 class SearchClickIn(BaseModel):

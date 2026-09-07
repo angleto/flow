@@ -30,6 +30,12 @@ async def search(
     body: SearchIn,
     ctx: Annotated[TenantCtx, Depends(tenant_ctx, scope="function")],
 ) -> list[SearchHit]:
+    # `_meta` is still discarded here, and that is a decision rather than an oversight. The
+    # response model is a bare array, so carrying the recall meta means wrapping it in an
+    # object, and the browser extension is a shipped artifact that consumes `SearchHit[]` and
+    # is not redeployed with the server. Breaking it to add a field is not a trade this
+    # endpoint gets to make on its own; the MCP surface carries the meta today, and the REST
+    # envelope is its own decision with its own compatibility plan.
     hits, _meta = await svc.search_unified_with_meta(
         ctx.session,
         org_id=ctx.org_id,
@@ -83,6 +89,8 @@ async def search(
             score=h.score,
             tags=_tags(h),
             scores_by_stage=h.scores_by_stage,
+            scope=h.scope,
+            model_id=h.model_id,
         )
         for h in hits
     ]

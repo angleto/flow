@@ -13337,6 +13337,22 @@ export interface components {
          *     filled, so a caller wanting to badge a result with its project had
          *     exactly one option: a fetch per row, turning a twenty-row page into
          *     twenty-one requests.
+         *
+         *     ``scores_by_stage`` says WHY the row ranked where it did. Its
+         *     per-branch entries are 1-based RANKS (lexical_exact / lexical_stem /
+         *     semantic / semantic_hosted / humus), not scores; only ``rrf`` is a
+         *     score, and it is the same number as ``score``. The fused value alone
+         *     cannot separate a hit the lexical branch found from one only the
+         *     dense branch reached, because RRF fuses by rank: a dense-only hit
+         *     scores exactly ``0.2/(60+rank)`` whatever its cosine was. Empty on
+         *     the entity-code path, where nothing was ranked.
+         *
+         *     ``scope`` says which boundary the row was retrieved under, ``org`` or ``project``, and
+         *     ``model_id`` is the backing blob's embedding model, where ``none`` means the row is
+         *     keyword-only and carries no dense vector. Both had been on the MCP surface for some time
+         *     and on this one not at all, although the two run the same function: a REST caller could
+         *     not tell a project-scoped hit from an org-wide one, nor a row that rode FTS alone from one
+         *     the dense branch found.
          */
         SearchHit: {
             /** Kind */
@@ -13360,6 +13376,17 @@ export interface components {
             score: number;
             /** Tags */
             tags?: components["schemas"]["TagBrief"][];
+            /** Scores By Stage */
+            scores_by_stage?: {
+                [key: string]: number;
+            };
+            /**
+             * Scope
+             * @default org
+             */
+            scope?: string;
+            /** Model Id */
+            model_id?: string | null;
         };
         /**
          * SearchIn
