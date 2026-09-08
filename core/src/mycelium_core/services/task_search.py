@@ -779,13 +779,23 @@ async def search_unified_with_meta(
         # Note search mirrors the task branch: the 'note' channel tag
         # scopes the retrieve to note-part blobs, then we resolve each
         # blob to its note via ``note_part_index_pointer`` and surface a
-        # titled hit that the SPA can route to /notes/:id. Project-scoped
-        # like 'blob' (note part blobs carry the note's project_id).
+        # titled hit that the SPA can route to /notes/:id.
+        #
+        # A caller that named a project gets that project. A caller that
+        # named none gets EVERY perimeter, not the NULL one, and that is the
+        # repair rather than a widening for its own sake. Note blobs carry
+        # their note's project, so ``project_id=None`` -- which means "the
+        # NULL perimeter" here and in three other services -- could never
+        # reach a note that belonged to a project. Task blobs live at NULL by
+        # design and were therefore always visible, which is why a gold set
+        # of twenty questions on 2026-09-07 scored 3 of 6 on tasks and
+        # **0 of 14 on notes**: the same one-line predicate, read twice.
+        note_scope = memory_svc.ANY_PROJECT if project_id is None else project_id
         note_hits, note_rmeta = await memory_svc.retrieve_with_meta(
             session,
             org_id=org_id,
             actor_id=actor_id,
-            project_id=project_id,
+            project_id=note_scope,
             query=query,
             operation_id=operation_id,
             limit=max(limit * 2, limit),
@@ -843,11 +853,15 @@ async def search_unified_with_meta(
         # we'd need multiple retrieves -- out of scope for v1, callers
         # pass at most one channel).
         single_channel = channel_keys[0] if channel_keys else None
+        # Same perimeter repair as the note branch above, and for the same
+        # reason: a caller that named no project is asking across projects,
+        # not asking for the blobs that happen to belong to none.
+        blob_scope = memory_svc.ANY_PROJECT if project_id is None else project_id
         blob_hits, blob_rmeta = await memory_svc.retrieve_with_meta(
             session,
             org_id=org_id,
             actor_id=actor_id,
-            project_id=project_id,
+            project_id=blob_scope,
             query=query,
             operation_id=operation_id,
             limit=max(limit * 2, limit),

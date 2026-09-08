@@ -4805,7 +4805,13 @@ async def search(
     'project' so you are never misled).
 
     ``kinds`` defaults to ``['task', 'blob', 'note']``. note/blob hits are
-    project-scoped to ``project_id``; task hits are org-wide UNLESS
+    project-scoped to ``project_id`` WHEN YOU PASS ONE; **omitting it searches
+    every project**, which is what "where did we decide X" needs, since not
+    knowing where is the question. Until 2026-09-08 omitting it meant the
+    perimeter of blobs belonging to NO project, and a gold set of twenty such
+    questions found three: task blobs live at that perimeter by design and
+    scored 3 of 6, note blobs carry their note's project and scored 0 of 14.
+    Task hits are org-wide UNLESS
     ``task_scope='project'`` (which ANDs the caller's project tag into the
     task branch). Task facets ``due_before`` (ISO date/datetime),
     ``assignee_handles``, ``state_id`` narrow the task branch, so "tasks due
