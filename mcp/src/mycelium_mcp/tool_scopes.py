@@ -350,6 +350,11 @@ TOOL_SCOPES: dict[str, str | frozenset[str] | None] = {
     "list_workflows": "workflows:read",
     "workflow_states": "workflows:read",
     "workflow_transitions": "workflows:read",
+    # Reads the task to find its project, then the workflow that project
+    # resolves to; both halves are reads and the narrower of the two scopes
+    # would not cover the other, so it takes the workflow one and the task
+    # read is gated by the tenant guard like every other task read.
+    "task_workflow": "workflows:read",
     "create_workflow": "workflows:write",
     "delete_workflow": "workflows:write",
     "set_default_workflow": "workflows:write",

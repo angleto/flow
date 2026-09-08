@@ -8248,6 +8248,11 @@ def _workflow(w: WorkflowDefinition) -> dict[str, Any]:
     return {
         "id": str(w.id),
         "name": w.name,
+        # What this workflow is for, in the org's own words. Migration 0065
+        # added the column and the model says it is "surfaced to MCP agents
+        # so they can reason about a task's workflow without inferring from
+        # name"; this layer dropped it, so the promise was storage-only.
+        "description": w.description,
         "is_default": w.is_default,
         "version": w.version,
     }
@@ -8260,6 +8265,17 @@ def _state(st: WorkflowState) -> dict[str, Any]:
         "ord": st.ord,
         "is_initial": st.is_initial,
         "is_terminal": st.is_terminal,
+        # Whether the SPA hides this column by default. An agent listing a
+        # board wants to know that a state exists but is not on screen.
+        "is_hidden": st.is_hidden,
+        # What this state means in THIS workflow. The model's own comment:
+        # an agent should know what "in_review" or "blocked" means here
+        # "without guessing from the state name". Guessing is what happened
+        # on 2026-09-08: a session finishing three tasks found `todo ->
+        # verify` refused, had nothing that said what `verify` is for or who
+        # moves a task into it, and picked `done` because the transition
+        # existed. A name is not a contract.
+        "description": st.description,
     }
 
 
@@ -8272,10 +8288,77 @@ def _transition(tr: WorkflowTransition) -> dict[str, Any]:
 
 @mcp.tool()
 async def list_workflows(token: str, org_id: str) -> list[dict[str, Any]]:
-    """List the org workflow definitions."""
+    """List the org workflow definitions, each with its description."""
     async with _tenant(token, org_id) as (s, org, _user):
         rows = await workflow_svc.list_workflows(s, org)
         return [_workflow(w) for w in rows]
+
+
+@mcp.tool()
+async def task_workflow(token: str, org_id: str, task_id: str) -> dict[str, Any]:
+    """Which workflow governs THIS task, what its states mean, and where the
+    task can go from where it is.
+
+    Ask this before moving a task, not after a transition is refused. There
+    is no single workflow to learn once: a project can override the org
+    default, so the states and the meanings that apply depend on the task's
+    project, and reasoning from a workflow seen on another task is reasoning
+    from the wrong machine.
+
+    Returns the workflow with its ``description``, every state with its own
+    (ordered, so the board's order is the list's order), the task's current
+    state, and ``allowed_next``: the states reachable from it in one step,
+    already resolved so a caller does not have to intersect the transition
+    table itself. An empty ``allowed_next`` on a non-terminal state is a
+    real answer and means the workflow has no way out of here.
+
+    The descriptions are the point. A name is a label: only the description
+    says what `verify` is for, who moves a task into it, and what has to be
+    true before it leaves. Where one is null, nobody has written it down --
+    say so rather than inferring it from the name.
+    """
+    async with _tenant(token, org_id) as (s, org, _user):
+        task = await tasks.get_task(s, org_id=org, task_id=uuid.UUID(task_id))
+        wf = await workflow_svc.effective_workflow_for_task(s, org, uuid.UUID(task_id))
+        states = await workflow_svc.get_states(s, wf.id)
+        transitions = await workflow_svc.list_transitions(s, wf.id)
+
+        by_id = {st.id: st for st in states}
+        current = by_id.get(task.state_id) if task.state_id else None
+
+        return {
+            "task_id": task_id,
+            "workflow": _workflow(wf),
+            "is_org_default": wf.is_default,
+            "states": [_state(st) for st in states],
+            "current_state": _state(current) if current is not None else None,
+            "allowed_next": _allowed_next(states, transitions, current),
+        }
+
+
+def _allowed_next(states, transitions, current):  # type: ignore[no-untyped-def]
+    """The states one transition away from ``current``, in the board's order.
+
+    A module-level function rather than a comprehension inside the tool
+    because it is the only reasoning that tool does, and a tool body reached
+    only through a session and a tenant is a tool body no unit test runs.
+    That is not hypothetical: the first version of ``task_workflow`` called
+    an import that did not exist in this module, the whole suite passed, and
+    the linter is what caught it.
+
+    ``current`` of ``None`` yields nothing, which is the honest answer for a
+    task sitting in no state: there is no row to read transitions from. It is
+    not the same as a state with no way out, and the caller can tell the two
+    apart because ``current_state`` is null in one and not in the other.
+
+    Ordered by ``states`` rather than by the transition table, so a board
+    reads down the columns the way a human sees them.
+    """
+    if current is None:
+        return []
+
+    reachable = {tr.to_state_id for tr in transitions if tr.from_state_id == current.id}
+    return [_state(st) for st in states if st.id in reachable]
 
 
 @mcp.tool()
@@ -8301,22 +8384,32 @@ async def create_workflow(
     name: str,
     states: list[dict[str, Any]],
     transitions: list[list[str]],
+    description: str | None = None,
 ) -> dict[str, Any]:
     """Create a workflow. ``states`` items: {name, ord?, is_initial?,
-    is_terminal?} (exactly one initial). ``transitions``: [from, to]
-    name pairs."""
+    is_terminal?, is_hidden?, description?} (exactly one initial).
+    ``transitions``: [from, to] name pairs.
+
+    Write the descriptions. A state name is a label, not a contract: only
+    the workflow's own description says what `verify` is for, who moves a
+    task into it, and what has to be true before it leaves. An agent given
+    the names alone guesses, and a guess about a terminal state is not
+    recoverable by the agent that made it."""
     async with _tenant(token, org_id) as (s, org, user):
         w = await workflow_svc.create_workflow(
             s,
             org_id=org,
             actor_id=user,
             name=name,
+            description=description,
             states=[
                 StateSpec(
                     name=st["name"],
                     ord=int(st.get("ord", 0)),
                     is_initial=bool(st.get("is_initial", False)),
                     is_terminal=bool(st.get("is_terminal", False)),
+                    is_hidden=bool(st.get("is_hidden", False)),
+                    description=st.get("description"),
                 )
                 for st in states
             ],
@@ -8333,9 +8426,14 @@ async def update_workflow(
     name: str,
     states: list[dict[str, Any]],
     transitions: list[list[str]],
+    description: str | None = None,
 ) -> dict[str, Any]:
     """Rename + reconcile a workflow's states (match by ``id``; new
-    ones omit it; dropped only if unused) and replace transitions."""
+    ones omit it; dropped only if unused) and replace transitions.
+
+    This is a REPLACE, including the descriptions: a state dict without a
+    ``description`` clears the one it had, exactly as it clears an ``ord``
+    it does not send. Read the states first and send them back whole."""
     async with _tenant(token, org_id) as (s, org, user):
         await workflow_svc.update_workflow(
             s,
@@ -8343,6 +8441,7 @@ async def update_workflow(
             actor_id=user,
             workflow_id=uuid.UUID(workflow_id),
             name=name,
+            description=description,
             states=[
                 StateEdit(
                     id=uuid.UUID(st["id"]) if st.get("id") else None,
@@ -8350,6 +8449,8 @@ async def update_workflow(
                     ord=int(st.get("ord", 0)),
                     is_initial=bool(st.get("is_initial", False)),
                     is_terminal=bool(st.get("is_terminal", False)),
+                    is_hidden=bool(st.get("is_hidden", False)),
+                    description=st.get("description"),
                 )
                 for st in states
             ],

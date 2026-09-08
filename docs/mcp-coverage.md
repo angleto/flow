@@ -47,7 +47,7 @@ handles (see the generated `tasks` section below). An agent never needs to
 over-fetch the org table and filter in its head.
 
 <!-- BEGIN GENERATED: mcp tool inventory (scripts/gen_mcp_coverage.py) -->
-**274 tools across 14 domains.** This inventory is generated from the live registry by `scripts/gen_mcp_coverage.py` — do not edit by hand; run `make mcp-coverage` to refresh. The one-line summary is each tool's first docstring line, so it cannot drift from the code.
+**275 tools across 14 domains.** This inventory is generated from the live registry by `scripts/gen_mcp_coverage.py` — do not edit by hand; run `make mcp-coverage` to refresh. The one-line summary is each tool's first docstring line, so it cannot drift from the code.
 
 ### search (3)
 
@@ -140,16 +140,17 @@ over-fetch the org table and filter in its head.
 | `task_handoffs_list` | List the coordination handoffs touching a task (incoming + |
 | `task_offer` | Owner: announce a task to eligible members (contract-net call- |
 
-### workflow (9)
+### workflow (10)
 
 | Tool | Summary |
 |---|---|
 | `create_workflow` | Create a workflow. ``states`` items: {name, ord?, is_initial?, |
 | `delete_workflow` | Delete a workflow (refused for the default or if its states |
-| `list_workflows` | List the org workflow definitions. |
+| `list_workflows` | List the org workflow definitions, each with its description. |
 | `set_default_workflow` | Promote a workflow to the org default (keeps exactly one). |
 | `set_project_workflow` | Set (or clear, with ``workflow_id=None``) a project's workflow |
 | `set_task_state` | Transition a task to a workflow state (validated). |
+| `task_workflow` | Which workflow governs THIS task, what its states mean, and where the |
 | `update_workflow` | Rename + reconcile a workflow's states (match by ``id``; new |
 | `workflow_states` | List a workflow's states (ordered). |
 | `workflow_transitions` | List a workflow's allowed (from -> to) transitions. |
