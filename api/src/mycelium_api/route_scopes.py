@@ -231,6 +231,10 @@ ROUTE_SCOPES: dict[tuple[str, str], object] = {
     # --- app ---
     ("GET", "/apidocs"): PUBLIC,
     ("GET", "/healthz"): PUBLIC,
+    # Probe endpoints. Unauthenticated because the kubelet has no
+    # credential to present, and safe to be: /healthz is a constant and
+    # /readyz answers only which dependency class is down, never why.
+    ("GET", "/readyz"): PUBLIC,
     # --- applications ---
     ("GET", "/docs"): PUBLIC,
     ("GET", "/docs/oauth2-redirect"): PUBLIC,

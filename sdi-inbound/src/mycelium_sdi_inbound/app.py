@@ -31,7 +31,9 @@ from collections.abc import AsyncIterator
 
 import lxml.etree as ET
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 
+from mycelium_core.readiness import not_ready_because
 from mycelium_core.schema_revision import verify_schema_revision
 from mycelium_core.services.sdi_inbound import ingest_notification
 from mycelium_core.services.sdi_passive import (
@@ -80,7 +82,18 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:
+        # Liveness and startup only; see ``/readyz`` for readiness. SdI
+        # retries on a connection it cannot reach, so a pod that is up
+        # but cannot record a delivery must fall out of rotation rather
+        # than accept and lose it.
         return {"status": "ok"}
+
+    @app.get("/readyz", tags=["meta"])
+    async def readyz() -> Response:
+        dependency = await not_ready_because()
+        if dependency is None:
+            return JSONResponse({"status": "ready"})
+        return JSONResponse({"status": "not-ready", "dependency": dependency}, status_code=503)
 
     @app.post("/sdi/notification", tags=["sdi"])
     async def notification(request: Request) -> Response:

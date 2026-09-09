@@ -143,6 +143,35 @@ def test_inbound_app_rejects_malformed_xml_with_400() -> None:
     assert client.post("/sdi/notification", content=b"HELLO").status_code == 400
 
 
+def test_inbound_app_separates_liveness_from_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This service writes every delivery it accepts, so a pod that
+    cannot reach the database must fall out of rotation rather than
+    acknowledge an invoice it will not record. Readiness says so;
+    liveness must not, because restarting fixes no database.
+
+    The API asserts the same separation over its own app
+    (``api/tests/test_probes_do_not_share_a_check.py``). Repeated here
+    because these are two FastAPI apps and the route registration, not
+    the shared check, is what a change would break.
+    """
+    from fastapi.testclient import TestClient
+
+    from mycelium_sdi_inbound.app import create_app
+
+    client = TestClient(create_app())
+    assert client.get("/readyz").json() == {"status": "ready"}
+
+    def _no_database() -> object:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("mycelium_core.readiness.get_engine", _no_database)
+    not_ready = client.get("/readyz")
+    assert not_ready.status_code == 503
+    assert not_ready.json()["dependency"] == "database"
+    # Liveness is unmoved by the same outage.
+    assert client.get("/healthz").status_code == 200
+
+
 async def _org() -> tuple[uuid.UUID, uuid.UUID]:
     async with admin_session() as s:
         r = await signup(

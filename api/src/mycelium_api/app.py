@@ -84,6 +84,7 @@ from mycelium_core.errors import (
 from mycelium_core.i18n import DEFAULT_LOCALE, render
 from mycelium_core.llm_ollama import OllamaLLM
 from mycelium_core.notification_channel import set_sender_override
+from mycelium_core.readiness import not_ready_because
 from mycelium_core.schema_revision import verify_schema_revision
 from mycelium_core.services.mailer import build_system_mailer, set_mailer
 from mycelium_core.services.notification_sender import build_notification_sender
@@ -294,7 +295,21 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:
+        # Liveness and startup only: answers from the process and touches
+        # nothing, because the remedy for a failing liveness probe is a
+        # restart and a restart cannot fix a dependency. Readiness is
+        # ``/readyz`` and is a different question.
         return {"status": "ok"}
+
+    @app.get("/readyz", tags=["meta"])
+    async def readyz() -> Response:
+        # Readiness: can this process serve right now. 503 takes the pod
+        # out of rotation without killing it, which is the correct remedy
+        # for a dependency that is down.
+        dependency = await not_ready_because()
+        if dependency is None:
+            return JSONResponse({"status": "ready"})
+        return JSONResponse({"status": "not-ready", "dependency": dependency}, status_code=503)
 
     @app.get("/apidocs", include_in_schema=False)
     async def apidocs() -> HTMLResponse:
