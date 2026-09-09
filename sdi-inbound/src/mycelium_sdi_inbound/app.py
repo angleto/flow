@@ -25,11 +25,14 @@ clean).
 from __future__ import annotations
 
 import base64
+import contextlib
 import logging
+from collections.abc import AsyncIterator
 
 import lxml.etree as ET
 from fastapi import FastAPI, Request, Response
 
+from mycelium_core.schema_revision import verify_schema_revision
 from mycelium_core.services.sdi_inbound import ingest_notification
 from mycelium_core.services.sdi_passive import (
     ingest_passive_invoice,
@@ -59,8 +62,21 @@ def _carries_identificativo_sdi(payload: bytes) -> bool:
     )
 
 
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Refuse to serve against a schema this build does not expect.
+
+    This service writes received invoices, so a deploy that skipped the
+    migrate step would have it accept a delivery from SdI and fail to
+    record it -- and SdI does not redeliver on our schedule. Refusing to
+    start leaves the previous pod serving instead.
+    """
+    await verify_schema_revision()
+    yield
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="Mycelium SDI inbound", version="0.1.0")
+    app = FastAPI(title="Mycelium SDI inbound", version="0.1.0", lifespan=_lifespan)
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:

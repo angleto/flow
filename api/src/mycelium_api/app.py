@@ -84,6 +84,7 @@ from mycelium_core.errors import (
 from mycelium_core.i18n import DEFAULT_LOCALE, render
 from mycelium_core.llm_ollama import OllamaLLM
 from mycelium_core.notification_channel import set_sender_override
+from mycelium_core.schema_revision import verify_schema_revision
 from mycelium_core.services.mailer import build_system_mailer, set_mailer
 from mycelium_core.services.notification_sender import build_notification_sender
 
@@ -222,6 +223,12 @@ def _make_lifespan(mcp_app: Any) -> Any:
         from mycelium_mcp.gateway import prewarm as prewarm_mcp_gateway
 
         settings = get_settings()
+        # Before anything is wired and before uvicorn serves: refuse to
+        # come up against a schema this build does not expect, naming the
+        # revision that is missing. A deploy that skipped the migrate step
+        # otherwise starts, serves, and fails on whichever request first
+        # touches the changed table.
+        await verify_schema_revision()
         # Local Ollama provider as the rank-0 fallback (task T5), the
         # API-process counterpart of the worker. Cleared on shutdown below.
         _wire_local_llm_override(settings)

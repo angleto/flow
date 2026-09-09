@@ -66,3 +66,4 @@ Format: Status, Context, Decision, Consequences, Alternatives rejected.
 - [0055 Two views of one document, not two documents](0055-two-views-of-one-document.md) — revises the single-surface editor decision in `0228012`
 - [0056 An indexing class on the row, not a read boundary](0056-index-scope-opt-out-from-automatic-indexing.md)
 - [0057 The browser is a fourth surface, and it holds a scoped credential](0057-the-browser-is-a-fourth-surface.md)
+- [0058 Refuse to serve behind the schema, serve ahead of it](0058-refuse-to-serve-behind-the-schema.md)

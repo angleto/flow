@@ -19,6 +19,7 @@ from mycelium_core.ai_providers import set_llm_override
 from mycelium_core.config import get_settings
 from mycelium_core.llm_ollama import OllamaLLM
 from mycelium_core.notification_channel import set_sender_override
+from mycelium_core.schema_revision import verify_schema_revision
 from mycelium_core.services.mailer import build_system_mailer, set_mailer
 from mycelium_core.services.notification_sender import build_notification_sender
 from mycelium_worker import (
@@ -96,6 +97,12 @@ def _enabled_jobs() -> list[Callable[[], Awaitable[None]]]:
 
 
 async def _run() -> None:
+    # Refuse to run against a schema this build does not expect, before
+    # any loop starts. The worker writes on every tick and nothing here
+    # is request-shaped, so without this a deploy that skipped the
+    # migrate step fails silently in a background loop rather than
+    # visibly on a request.
+    await verify_schema_revision()
     # Registered jobs run concurrently; see ``_enabled_jobs`` for the
     # list and the opt-in garden loop.
     await asyncio.gather(*(job() for job in _enabled_jobs()))
