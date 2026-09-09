@@ -39,10 +39,10 @@
     "message": "Not connected"
   },
   "notConnectedBody": {
-    "message": "Connect this browser to a workspace. It opens Mycelium, where you approve exactly what is being granted."
+    "message": "Connect this browser to Mycelium. It opens the app, where you approve exactly what is being granted."
   },
   "connect": {
-    "message": "Connect a workspace"
+    "message": "Connect this browser"
   },
   "revokedTitle": {
     "message": "Reconnect $WORKSPACE$",
@@ -262,7 +262,7 @@
     "message": "The extension is switched off."
   },
   "errDisconnected": {
-    "message": "This browser is not connected to a workspace."
+    "message": "This browser is not connected to Mycelium."
   },
   "errUnauthenticated": {
     "message": "This browser's credential is no longer accepted."

@@ -1,7 +1,8 @@
 # ADR-0057: The browser is a fourth surface, and it holds a scoped credential
 
-Status: Accepted (2026-09-03). Amended 2026-09-09: a deployment serves its
-own package (see the amendment at the end).
+Status: Accepted (2026-09-03). Amended 2026-09-09 twice: a deployment serves
+its own package, and the credential is bound to the account rather than to one
+workspace (see the amendments at the end).
 
 Relates to: ADR-0001 (one domain, thin adapters — this is a fourth adapter and
 holds no business logic), ADR-0003 (the unified typed tag, which is what a
@@ -287,3 +288,108 @@ nginx already answers, and the package holds nothing a credential protects.
 **Reading the origin at runtime so one package could serve every
 deployment.** Not available: Chrome requires both the host permission and the
 `externally_connectable` pattern as static manifest entries.
+
+## Amendment (2026-09-09): the credential is the holder's, across their workspaces
+
+### Context
+
+Two things were wrong at once, and they had the same root: the credential
+was modelled on the MCP assistant it borrows its table from, rather than on
+the surface it actually serves.
+
+**Nobody could connect but the owner, and in practice not even the owner.**
+`create_assistant` requires `Role.owner`, which is the right threshold for a
+credential whose default scope reaches most of the workspace. The settings
+page meanwhile said, in this document's own words, that installing a browser
+extension is not an administrative act, and the page is available to
+everyone. A member pressing Connect got a refusal the screen could not
+explain. So did the owner: the SPA sends `X-Workspace-Role` as a *downgrade*
+and defaults to `member`, so an owner who had not flipped the "act as" lever
+was refused on their own workspace.
+
+**A panel over one workspace is not a panel.** A person moves between their
+workspaces on a single login; the panel opens over whatever page they are
+reading. Connecting once per workspace would have meant one long-lived
+secret per workspace in the same Chrome profile — more credentials, more
+things to revoke, and no more authority in any of them, since each is
+already bounded by what that person may do.
+
+### Decision
+
+**The threshold follows the capability.** `SELF_SERVICE_SCOPES` names the
+fixed, narrow set the panel asks for. A credential whose scope is a subset of
+it may be created, rotated and revoked by any member for themselves; anything
+wider is an assistant and stays owner-gated. The test is on what is being
+asked for, never on the `provider` label the caller chooses, so it cannot be
+talked around. Managing follows minting deliberately: a person who may create
+a credential must be able to destroy it, or a lost browser stays connected.
+
+**The credential binds to the account.** `agent_tokens.workspace_binding` is
+`workspace` (the default, and what every existing credential is) or
+`account`, decided by the service from the scope and refused for anything
+wider than the self-service set. `_confine_agent_token` lets an
+account-bound credential through the REST door; everything after it is
+unchanged, which is the whole of the security argument:
+
+- the workspace arrives per request, as it does for a session;
+- `_tenant_scope` resolves the HOLDER's membership in that workspace and
+  refuses one they do not belong to;
+- the effective role is clamped to that membership, so the credential is a
+  guest where its holder is a guest;
+- the scope list still applies on top.
+
+The binding is read at authentication time, out of the SECURITY DEFINER
+`authenticate_agent_token` (migration 0012), not looked up afterwards: a
+credential's tenancy is part of authenticating it, and a second query would
+be a second place for the answer to come from.
+
+**`GET /agent/workspaces` is the second META route.** A credential that may
+act in several workspaces cannot name one in a header before it knows which
+ones it may name. It is pre-tenant, answers only about the caller's own
+workspaces, and for a confined credential answers with the single workspace
+it was minted for. `GET /workspaces` stays HUMAN_ONLY.
+
+**The extension asks, and is not told.** After the handover it calls that
+route and files one row per workspace over the one secret. The panel's state
+— scope selection, recents, caches, the pinned task — is per workspace and
+would be wrong if it were shared, so the fan-out happens in storage rather
+than as a special case in each of those places. A failed lookup leaves the
+connection working in the workspace it was made in.
+
+### Consequences
+
+The blast radius of the secret is now the panel's scope across every
+workspace its holder belongs to, rather than in one. Bounded by their role in
+each, revoked in one act, and stated on the consent screen and in
+`docs/extension.md` rather than left to be discovered.
+
+The MCP surface is untouched: there the tenant comes from the principal, and
+`agent_tokens.org_id` still names the workspace a credential was minted in.
+
+`attachments:write` is catalogued `danger` and is in the self-service set,
+because it is the whole of "file the page you are on". It is the only one, and
+a test pins that as an exact set rather than a waiver.
+
+A rotation inherits the tenancy of the credential it replaces: a new secret
+for the same credential, never a change to what that credential reaches.
+
+### Alternatives rejected
+
+**Leaving the owner gate and fixing the page's wording instead.** It would
+have made the product true by making it worse: the fastest surface reachable
+only by whoever runs the deployment, for a credential that can do less than
+the person holding it.
+
+**Deciding the binding from the `provider` string.** The caller chooses it,
+so a wide-scoped assistant labelled `mycelium-extension` would have walked
+through both the threshold and the reach.
+
+**Widening `GET /workspaces` to scoped credentials.** It answers a question
+about the ACCOUNT — every workspace, its status, the switcher's data. The
+narrower question deserved its own route, and the fence around the account
+row stays where it was.
+
+**Minting one credential per workspace behind the scenes at connect time.**
+The same reach, several secrets, and a consent screen that would have had to
+explain a fan-out nobody asked for. Revoking would then be N acts, and the
+one people forget is the one that matters.

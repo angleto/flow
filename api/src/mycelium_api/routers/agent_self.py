@@ -35,11 +35,13 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from mycelium_api.deps import TenantCtx, current_claims, tenant_ctx
-from mycelium_core.models.agent_token import AgentToken
+from mycelium_api.deps import TenantCtx, current_claims, current_user_id, tenant_ctx
+from mycelium_core.db import admin_session
+from mycelium_core.models.agent_token import AgentToken, WorkspaceBinding
 from mycelium_core.models.ai_assistant import AiAssistant
 from mycelium_core.models.identity import Identity
 from mycelium_core.models.organization import Organization
+from mycelium_core.services.auth import list_user_orgs
 
 router = APIRouter(prefix="/agent", tags=["meta"])
 
@@ -69,6 +71,20 @@ class SelfTokenOut(BaseModel):
     expires_at: datetime.datetime | None = None
 
 
+class SelfWorkspacesOut(BaseModel):
+    """The workspaces this credential may act in.
+
+    ``binding`` says which rule produced the list, because the two are
+    different promises and a client that cannot tell them apart would
+    cache the wrong one: ``workspace`` is a credential confined to the
+    one it was minted for, ``account`` follows its holder into every
+    workspace they belong to -- including one they join tomorrow, which
+    is why this is asked rather than remembered."""
+
+    binding: str
+    workspaces: list[SelfWorkspaceOut]
+
+
 class SelfOut(BaseModel):
     workspace: SelfWorkspaceOut
     identity: SelfIdentityOut
@@ -78,6 +94,52 @@ class SelfOut(BaseModel):
     # exactly those keys. The distinction matters to a client: null is
     # "ask the server", an empty list is "you may do nothing".
     scope: list[str] | None = None
+    # Which workspaces this credential may act in at all. The panel
+    # needs it to decide whether to offer a workspace switcher, and a
+    # person reading Settings needs it to know what the secret in their
+    # browser reaches.
+    workspace_binding: str = WorkspaceBinding.workspace.value
+
+
+@router.get("/workspaces", response_model=SelfWorkspacesOut)
+async def get_agent_workspaces(
+    user_id: Annotated[uuid.UUID, Depends(current_user_id)],
+    claims: Annotated[dict[str, Any], Depends(current_claims)],
+) -> SelfWorkspacesOut:
+    """Where this credential may act.
+
+    Pre-tenant, and it must be: a credential that reaches several
+    workspaces cannot put one in ``X-Workspace-Id`` before it knows
+    which ones exist for it. Deliberately NOT ``GET /workspaces``, which
+    stays HUMAN_ONLY and answers a question about the ACCOUNT (every
+    workspace, its status, the switcher's data). This answers the
+    narrower one -- what may this credential act on -- and for a
+    confined credential the answer is one row, not a list of places it
+    cannot go.
+
+    The role on each row is the caller's membership there, which is the
+    ceiling this credential is clamped to in that workspace. It is not a
+    promise that every operation will succeed: the scope list still
+    applies, and both are re-read per request."""
+    is_agent = claims.get("typ") == "agent"
+    binding = (
+        WorkspaceBinding(str(claims.get("workspace_binding", WorkspaceBinding.workspace.value)))
+        if is_agent
+        else WorkspaceBinding.account
+    )
+    async with admin_session() as session:
+        rows = await list_user_orgs(session, user_id=user_id)
+    if is_agent and binding is WorkspaceBinding.workspace:
+        # Confined: the one it was minted for, and only if the holder is
+        # still a member of it. A credential whose holder left the
+        # workspace answers an empty list rather than a row nothing will
+        # honour.
+        bound = str(claims.get("org_id") or "")
+        rows = [r for r in rows if str(r.id) == bound]
+    return SelfWorkspacesOut(
+        binding=binding.value,
+        workspaces=[SelfWorkspaceOut(id=r.id, name=r.name, role=str(r.role)) for r in rows],
+    )
 
 
 @router.get("/self", response_model=SelfOut)
@@ -149,4 +211,5 @@ async def get_agent_self(
         identity=identity,
         token=token,
         scope=list(raw_scope) if raw_scope is not None else None,
+        workspace_binding=str(claims.get("workspace_binding", WorkspaceBinding.workspace.value)),
     )

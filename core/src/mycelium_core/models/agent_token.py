@@ -13,9 +13,11 @@ time is O(1) on ``token_hash``.
 from __future__ import annotations
 
 import datetime
+import enum
 import uuid
 
 from sqlalchemy import DateTime, ForeignKey, LargeBinary, String
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,6 +28,28 @@ from mycelium_core.models.base import (
     UUIDPKMixin,
     VersionMixin,
 )
+
+
+class WorkspaceBinding(enum.StrEnum):
+    """Which workspaces a credential may act in.
+
+    ``workspace``: the one it was minted for, and no other. The default,
+    and what every credential minted before this column existed is: the
+    CLI stores a workspace beside each token and refuses to switch, and
+    the server enforces the same in ``_confine_agent_token``.
+
+    ``account``: every workspace its holder belongs to, decided per
+    request from the workspace the request names. It is NOT a wider
+    grant. The holder's own membership in that workspace still
+    authorizes each operation, so the credential is a delegation of what
+    the person can already do there and follows them into a workspace
+    they join and out of one they leave. What it does widen is the blast
+    radius of the secret itself, and that is written down where the
+    reader approves it and in ``docs/extension.md``.
+    """
+
+    workspace = "workspace"
+    account = "account"
 
 
 class AgentToken(UUIDPKMixin, OrgScopedMixin, TimestampMixin, VersionMixin, Base):
@@ -66,6 +90,17 @@ class AgentToken(UUIDPKMixin, OrgScopedMixin, TimestampMixin, VersionMixin, Base
         ForeignKey("ai_assistants.id", ondelete="CASCADE"),
         nullable=True,
     )
+    # Decided by the service at mint time from what the credential may
+    # do, never by the caller's label. ``org_id`` above stays the
+    # workspace it was minted in either way: it is the home this
+    # credential belongs to and the tenant the MCP surface reads, which
+    # is why an account-bound credential changes the REST door only.
+    workspace_binding: Mapped[WorkspaceBinding] = mapped_column(
+        SAEnum(WorkspaceBinding, name="workspace_binding", native_enum=True, create_type=False),
+        nullable=False,
+        default=WorkspaceBinding.workspace,
+        server_default=WorkspaceBinding.workspace.value,
+    )
 
 
-__all__ = ["AgentToken"]
+__all__ = ["AgentToken", "WorkspaceBinding"]

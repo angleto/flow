@@ -78,6 +78,10 @@ export interface ConnectMessage {
   state: string
   /** The raw ``mycelium_at_`` value, returned by the server exactly once. */
   secret: string
+  /** Where the panel should OPEN, which is the workspace the person was
+   *  looking at when they approved. Not the credential's perimeter: that
+   *  is every workspace they belong to, and the extension asks the server
+   *  for it rather than believing a page. */
   workspace: { id: string; name: string }
   /** The assistant row behind the credential. The extension shows it so a
    *  person can find the right row to revoke, and revocation is the app's

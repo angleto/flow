@@ -175,8 +175,19 @@ const handlers: { [K in OperationName]: Handler<K> } = {
     // Forgets the secret HERE. It does not revoke on the server, and the
     // panel says so: the app's settings page is where a credential
     // actually ends, and that difference matters if a machine is lost.
-    await storage.forgetConnection(workspaceId)
-    if ((await storage.activeWorkspace()) === workspaceId) await storage.setActiveWorkspace(null)
+    //
+    // Forgetting one row of an account-bound credential would forget a
+    // name and keep the secret, under the other rows it also stands
+    // behind. "Disconnect" has to mean the secret is gone from this
+    // machine, so every row of that credential goes with it.
+    const target = await storage.connection(workspaceId)
+    const rows = await storage.connections()
+    const doomed = target
+      ? rows.filter((r) => r.assistantId === target.assistantId).map((r) => r.workspaceId)
+      : [workspaceId]
+    for (const id of doomed) await storage.forgetConnection(id)
+    const active = await storage.activeWorkspace()
+    if (active !== null && doomed.includes(active)) await storage.setActiveWorkspace(null)
     return ok((await storage.connections()).map(({ secret: _s, ...rest }) => rest))
   },
   'conn/self': async (_p, conn) => {

@@ -161,6 +161,10 @@ def test_meta_is_callable_under_any_scope_including_none_granted() -> None:
     capability that does not exist."""
     for granted in ([], ["tasks:read"], ["workflows:write"]):
         assert scope_permits("GET", "/agent/self", granted), granted
+        # Same circularity one question earlier: a credential that may
+        # act in several workspaces cannot name one in a header before
+        # it knows which ones it may name.
+        assert scope_permits("GET", "/agent/workspaces", granted), granted
 
     # And it is still authenticated and still narrow: it is not a way to
     # reach the account row, which stays fenced off.
@@ -169,11 +173,19 @@ def test_meta_is_callable_under_any_scope_including_none_granted() -> None:
     assert not scope_permits("GET", "/workspaces", ["tasks:read"])
 
 
-def test_meta_is_one_route_and_stays_one() -> None:
+def test_meta_is_two_routes_and_stays_two() -> None:
     """META is a hole by construction, so it is enumerated. Growing the
-    set is a decision, not a diff nobody reads."""
+    set is a decision, not a diff nobody reads.
+
+    It grew by one, deliberately, when a credential became able to act in
+    more than one workspace: ``GET /agent/workspaces`` says which ones,
+    and it has to be askable before the caller can put a workspace in a
+    header. It stays narrow in the way the fence below describes -- it
+    answers about the CALLER's own workspaces, never about the account
+    row, and a confined credential still gets exactly the one it was
+    minted for."""
     meta_routes = {route for route, required in ROUTE_SCOPES.items() if required is META}
-    assert meta_routes == {("GET", "/agent/self")}
+    assert meta_routes == {("GET", "/agent/self"), ("GET", "/agent/workspaces")}
 
 
 # --------------------------------------------------------------------------

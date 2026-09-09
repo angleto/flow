@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mycelium_core.models.agent_run import AgentRunStatus
+from mycelium_core.models.agent_token import WorkspaceBinding
 from mycelium_core.models.ai_assistant import AssistantRuntime
 from mycelium_core.models.billing import CostBasis, RateUnit, StorageKind
 from mycelium_core.models.budget import BudgetPeriod
@@ -3860,6 +3861,12 @@ class AiAssistantCreateIn(BaseModel):
     # runs elsewhere, which is what this endpoint hands out. Declaring
     # ``internal`` says the dispatch loop may drive this assistant.
     runtime: AssistantRuntime = Field(default=AssistantRuntime.external)
+    # Omitted means ``workspace``: the credential acts only in the
+    # workspace it is created in, which is what every client but the
+    # browser panel wants and what the CLI already tells its users.
+    # ``account`` is refused for any scope wider than the self-service
+    # set, so asking for it is not a way around the mint threshold.
+    workspace_binding: WorkspaceBinding = Field(default=WorkspaceBinding.workspace)
 
 
 class AiAssistantPatchIn(BaseModel):
@@ -3891,6 +3898,9 @@ class AiAssistantOut(BaseModel):
     # rotations). NULL when no token has been minted yet (shouldn't
     # happen via this flow but defensive).
     token_prefix: str | None = None
+    # Read from that same live token, so Settings can say what the
+    # secret reaches rather than inferring it from the provider label.
+    workspace_binding: WorkspaceBinding = WorkspaceBinding.workspace
 
 
 class AiAssistantCreatedOut(BaseModel):

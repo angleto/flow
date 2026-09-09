@@ -24,6 +24,7 @@ from mycelium_core.config import get_settings
 from mycelium_core.db import admin_session, tenant_session
 from mycelium_core.errors import AuthError, ForbiddenError, NotFoundError
 from mycelium_core.i18n import MessageCode
+from mycelium_core.models.agent_token import WorkspaceBinding
 from mycelium_core.models.attachment import Attachment
 from mycelium_core.models.membership import Role
 from mycelium_core.models.user import User
@@ -378,8 +379,20 @@ def _confine_agent_token(claims: dict[str, Any], org_id: uuid.UUID) -> None:
 
     A human session JWT is untouched: it has no ``org_id`` claim, because
     a person legitimately moves between their workspaces on one login.
-    That is the whole difference between a session and a credential."""
+    That is the whole difference between a session and a credential.
+
+    An ``account``-bound credential is the deliberate exception, and it
+    is not a hole in the rule above: it moves between workspaces the way
+    a session does, and it is authorized the way a session is. The
+    workspace still arrives per request; ``_tenant_scope`` still resolves
+    the HOLDER's membership there and refuses a workspace they do not
+    belong to; the effective role is still clamped to that membership,
+    so the credential is a guest where its holder is a guest. What it
+    does NOT do is carry authority of its own into a workspace nobody
+    granted it."""
     if claims.get("typ") != "agent":
+        return
+    if claims.get("workspace_binding") == WorkspaceBinding.account.value:
         return
     bound = claims.get("org_id")
     if not bound:

@@ -102,8 +102,17 @@ describe('the network seam', () => {
     expect(res.error.message).toBe('Ambito negato')
   })
 
-  it('drops the credential on 401, and only for that workspace', async () => {
-    await storage.putConnection({ ...conn, workspaceId: 'ws-2', workspaceName: 'Other' })
+  it('drops the credential on 401, and leaves another credential alone', async () => {
+    // A DIFFERENT credential, which is what the isolation is about: the
+    // second row must carry its own assistantId, or it is the same
+    // credential under another name and dies with the first (see the
+    // account-bound case below).
+    await storage.putConnection({
+      ...conn,
+      workspaceId: 'ws-2',
+      workspaceName: 'Other',
+      assistantId: 'a-2',
+    })
     await storage.writeCache(storage.cacheKey('ws-1', 'x'), { a: 1 })
     await storage.writeCache(storage.cacheKey('ws-2', 'x'), { a: 1 })
 
@@ -124,6 +133,32 @@ describe('the network seam', () => {
 
     expect(await storage.readCache(storage.cacheKey('ws-1', 'x'))).toBeUndefined()
     expect(await storage.readCache(storage.cacheKey('ws-2', 'x'))).toEqual({ a: 1 })
+  })
+
+  it('drops every row an account-bound credential stands behind', async () => {
+    // One secret, one row per workspace, because the panel's caches and
+    // recents are per workspace. When that secret dies they all do, and
+    // a panel that marked only the row which happened to make the call
+    // would offer switches that fail one after another.
+    await storage.putConnection({
+      ...conn,
+      workspaceId: 'ws-2',
+      workspaceName: 'Other',
+      binding: 'account',
+    })
+    await storage.putConnection({ ...conn, binding: 'account' })
+
+    vi.stubGlobal('fetch', respond(401, { code: 'agent.token_invalid', detail: 'no' }))
+    await call(conn, '/tasks')
+
+    for (const id of ['ws-1', 'ws-2']) {
+      const row = await storage.connection(id)
+      expect(row?.revoked, id).toBe(true)
+      expect(row?.secret, id).toBe('')
+      // The name survives, so the panel can say which workspaces need
+      // reconnecting rather than showing an empty list.
+      expect(row?.workspaceName, id).toBeTruthy()
+    }
   })
 
   it('tells a timeout apart from an unreachable server', async () => {

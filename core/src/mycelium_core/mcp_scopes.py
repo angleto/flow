@@ -378,9 +378,57 @@ DEFAULT_SCOPES: tuple[str, ...] = tuple(s.key for s in SCOPE_CATALOG if s.catego
 VALID_SCOPE_KEYS: frozenset[str] = frozenset(s.key for s in SCOPE_CATALOG)
 
 
+# The keys a member may delegate to a credential of their OWN, without an
+# owner's approval, and the only shape of credential that may reach every
+# workspace its holder belongs to.
+#
+# Minting a long-lived bearer credential is owner-gated because such a
+# secret outlives the session that created it and lives wherever the
+# holder put it. That threshold is right for a general MCP assistant,
+# whose default is close to everything. It is wrong for the browser
+# panel, which the product tells every reader to install and which can do
+# a fixed, narrow subset of what its holder can already do -- and the two
+# statements have contradicted each other in the product for as long as
+# the page has existed: the page said "installing this is not an
+# administrative act" and the server refused anyone but the owner.
+#
+# The threshold therefore follows the CAPABILITY, not the label. A
+# request for these keys and no others is self-service; a request for one
+# key more is an assistant, and owner-gated as before. Nothing here can
+# be gamed by a caller: asking for more moves the threshold up, and the
+# provider string, which the caller does choose, decides nothing.
+#
+# This is a ceiling, never a grant. Every operation is still authorized
+# against the holder's own role in the workspace named by the request, so
+# a credential whose holder is a guest somewhere acts as a guest there.
+#
+# One key here is catalogued ``danger``: ``attachments:write``, because
+# uploaded bytes leave the workspace boundary when they are read back. It
+# is also the whole of "file the page you are on", which is the
+# capability the panel exists for. The other danger keys -- the ones that
+# spend credits or destroy data -- stay owner-granted, and a test pins
+# that this list holds exactly the one exception.
+SELF_SERVICE_SCOPES: frozenset[str] = frozenset(
+    {
+        "tasks:read",
+        "tasks:write",
+        "tasks:state",
+        "notes:read",
+        "notes:write",
+        "tags:read",
+        "tags:assign",
+        "workflows:read",
+        "search:read",
+        "search:write",
+        "attachments:write",
+    }
+)
+
+
 __all__ = [
     "DEFAULT_SCOPES",
     "SCOPE_CATALOG",
+    "SELF_SERVICE_SCOPES",
     "VALID_SCOPE_KEYS",
     "Category",
     "ScopeDef",

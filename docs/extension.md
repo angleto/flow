@@ -53,16 +53,46 @@ talks to another.
 
 A connection always starts in the extension, never in the app. The extension
 opens the settings page with a single-use nonce; the app shows which
-extension is asking, which workspace it would be granted, and the exact list
-of permissions, rendered from the server's own catalogue so the screen and
-the grant cannot disagree. Approving mints a credential scoped to that list
-and hands it to the extension.
+extension is asking, what it would reach, and the exact list of permissions,
+rendered from the server's own catalogue so the screen and the grant cannot
+disagree. Approving mints a credential scoped to that list and hands it to
+the extension.
 
 You never type a password into the extension, and the extension never reads
 the app's page.
 
-**A credential is per workspace.** Connecting a second workspace is a
-separate, deliberate act performed from inside that workspace.
+**Any member may connect their own browser.** The panel can do a fixed,
+narrow subset of what its holder can already do, so the threshold for
+minting it is membership rather than ownership. A credential that asks for
+anything beyond that list is an assistant again, and stays owner-gated —
+the test is on the capability, so it cannot be talked around by relabelling
+the request. (This is also why connecting used to fail for the workspace's
+own owner: the SPA acts as `member` by default and switches up only when
+asked, so the owner met an owner-gated route without a hint that a role
+lever was in the way.)
+
+**One credential, every workspace you belong to.** The panel sits over an
+account, not over a workspace: you move between your workspaces on one
+login, and one secret per workspace would have put several long-lived
+credentials in the same browser profile to buy nothing.
+
+What that widens is the reach of the secret, and nothing else:
+
+- The workspace arrives with every request, exactly as it does from the SPA.
+- Your membership **there** authorizes every operation. The credential is a
+  guest where you are a guest, and can do nothing at all in a workspace you
+  are not a member of.
+- The scope list applies on top, in every workspace.
+- A workspace you join later is reachable without reconnecting; one you
+  leave stops being reachable, and the panel drops it on its next refresh.
+
+The extension asks `GET /agent/workspaces` — which is what a credential may
+act in, not what the account contains — rather than being told by the page:
+what a credential reaches is the server's fact about it.
+
+Credentials that did **not** ask for this stay confined to the workspace
+they were minted in, and the server refuses them anywhere else. That is
+every CLI and MCP credential.
 
 ### What it may do
 
@@ -93,7 +123,10 @@ what does — and it is the one that matters if a machine is lost.
 - **Anything running as your Chrome profile.** The credential lives in
   `chrome.storage.local`, a database in the profile directory with no
   additional encryption. Full-disk encryption is the control, and it is the
-  operating system's.
+  operating system's. Since one credential now reaches every workspace you
+  belong to, what a reader of that profile gets is the panel's scope across
+  all of them rather than in one — bounded by your own role in each, and
+  revoked in one act from the settings page.
 - **A compromised update of the extension itself.** The publishing account is
   the trust anchor.
 - **A browser already compromised when you connect.** The handshake grants

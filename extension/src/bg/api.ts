@@ -195,9 +195,12 @@ export async function call<T>(
     // An agent token has no refresh, and the server collapses unknown,
     // revoked, expired and deactivated into one answer. There is nothing
     // to single-flight and no retry that can succeed, so the credential
-    // is dropped now rather than replayed. Only THIS workspace: one
-    // credential dying says nothing about the others.
-    await markRevoked(conn.workspaceId)
+    // is dropped now rather than replayed. Every row it stands behind,
+    // and no more: one CREDENTIAL dying says nothing about another, but
+    // an account-bound one stands behind a row per workspace and marking
+    // only the one that happened to make the call would leave the panel
+    // offering switches that all fail.
+    await markRevoked(conn)
   }
 
   const params = (body as { params?: Record<string, unknown> } | null)?.params
@@ -221,12 +224,13 @@ export async function call<T>(
   return { ok: false, error: failure }
 }
 
-async function markRevoked(workspaceId: string): Promise<void> {
-  const conn = await storage.connection(workspaceId)
-  if (!conn) return
-  // The secret goes, the row stays: the panel has to be able to say
-  // WHICH workspace needs reconnecting, by name, rather than showing an
-  // empty list and letting the person work out what happened.
-  await storage.putConnection({ ...conn, secret: '', revoked: true })
-  await clearCaches(workspaceId)
+async function markRevoked(dead: StoredConnection): Promise<void> {
+  for (const row of await storage.connections()) {
+    if (row.assistantId !== dead.assistantId) continue
+    // The secret goes, the row stays: the panel has to be able to say
+    // WHICH workspaces need reconnecting, by name, rather than showing
+    // an empty list and letting the person work out what happened.
+    await storage.putConnection({ ...row, secret: '', revoked: true })
+    await clearCaches(row.workspaceId)
+  }
 }

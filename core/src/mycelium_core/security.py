@@ -101,6 +101,10 @@ async def decode_token_async(
       ``None`` for a bare token; present only for agent tokens. The API
       uses it to attribute an agent's direct-HTTP write (the token-free
       streaming path) to the same identity badge as its MCP-tool writes
+    - ``workspace_binding``: ``workspace`` (this credential acts only in
+      the workspace it was minted for) or ``account`` (every workspace
+      its holder belongs to, decided per request and authorized by their
+      membership there); present only for agent tokens
 
     Raises :class:`mycelium_core.errors.AuthError` on a bad / revoked /
     expired credential, same contract as :func:`decode_token`.
@@ -126,5 +130,9 @@ async def decode_token_async(
             # a scoped assistant simply stops speaking MCP and regains full
             # access here (task c19f2f63, enabler B).
             "assistant_scope": result.assistant_scope,
+            # Re-read on every request, like the revocation and expiry
+            # checks beside it: a credential's tenancy is part of
+            # authenticating it, not something a client was told once.
+            "workspace_binding": result.workspace_binding.value,
         }
     return decode_token(raw)

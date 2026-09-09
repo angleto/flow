@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mycelium_core.db import admin_session
 from mycelium_core.errors import NotFoundError
 from mycelium_core.i18n import MessageCode
-from mycelium_core.models.agent_token import AgentToken
+from mycelium_core.models.agent_token import AgentToken, WorkspaceBinding
 from mycelium_core.models.membership import Role
 from mycelium_core.services import audit
 from mycelium_core.services.rbac import require_role
@@ -87,6 +87,10 @@ class AuthenticatedAgent:
     # access — the UI funnels new mints through the assistant flow.
     assistant_id: uuid.UUID | None = None
     assistant_scope: list[str] | None = None
+    # Which workspaces this credential may act in. Read at
+    # authentication time rather than looked up afterwards: a
+    # credential's tenancy is part of what authenticating it establishes.
+    workspace_binding: WorkspaceBinding = WorkspaceBinding.workspace
 
 
 async def mint(
@@ -98,8 +102,10 @@ async def mint(
     scope: str = "mcp",
     ttl_days: int | None = DEFAULT_TTL_DAYS,
     assistant_id: uuid.UUID | None = None,
+    workspace_binding: WorkspaceBinding = WorkspaceBinding.workspace,
+    minimum_role: Role = Role.owner,
 ) -> MintResult:
-    """Owner-gated. Mint a fresh long-lived bearer token.
+    """Mint a fresh long-lived bearer token. Owner-gated by default.
 
     ``ttl_days=None`` disables expiry (a never-expiring credential);
     the default 365 days is a deliberate floor on forgotten secrets.
@@ -107,8 +113,18 @@ async def mint(
     ``assistant_id`` binds the token to an ``ai_assistants`` row when
     set (post-migration 0059); NULL keeps the legacy bare-token shape
     for back-compat with pre-assistant integrations.
+
+    ``workspace_binding`` says which workspaces the credential may act
+    in; ``org_id`` remains the workspace it was minted in either way.
+
+    ``minimum_role`` is the threshold for MINTING, and the caller passes
+    a lower one only where the credential cannot exceed what its holder
+    can already do (``ai_assistants.create_assistant``, which derives it
+    from the requested scope). It is not a parameter any request
+    controls: no route reads it, and the one caller that lowers it
+    computes it from the catalogue.
     """
-    await require_role(session, org_id, actor_id, Role.owner)
+    await require_role(session, org_id, actor_id, minimum_role)
     raw = _generate_raw()
     token_hash = _hash(raw)
     expires_at: datetime.datetime | None = None
@@ -123,6 +139,7 @@ async def mint(
         scope=scope,
         expires_at=expires_at,
         assistant_id=assistant_id,
+        workspace_binding=workspace_binding,
     )
     session.add(row)
     await session.flush()
@@ -137,6 +154,7 @@ async def mint(
             "name": name,
             "scope": scope,
             "assistant_id": str(assistant_id) if assistant_id else None,
+            "workspace_binding": workspace_binding.value,
         },
     )
     return MintResult(token=row, raw=raw)
@@ -233,7 +251,7 @@ async def _call_authenticate_fn(
     result = await session.execute(
         text(
             "SELECT out_token_id, out_user_id, out_org_id, out_scope, "
-            "out_assistant_id, out_assistant_scope "
+            "out_assistant_id, out_assistant_scope, out_workspace_binding "
             "FROM authenticate_agent_token(:h)"
         ),
         {"h": token_hash},
@@ -260,6 +278,14 @@ async def _call_authenticate_fn(
         # ``AiAssistant.scope_list()``, which already treats a non-list as no
         # scopes.
         assistant_scope = []
+    try:
+        binding = WorkspaceBinding(str(row[6]))
+    except ValueError:
+        # An unrecognised value is a row this code does not understand,
+        # and the safe reading of a tenancy it cannot parse is the
+        # narrow one. Never the wide one, which is why this is not a
+        # default on the enum.
+        binding = WorkspaceBinding.workspace
     return AuthenticatedAgent(
         token_id=row[0],
         user_id=row[1],
@@ -267,6 +293,7 @@ async def _call_authenticate_fn(
         scope=row[3],
         assistant_id=row[4],
         assistant_scope=assistant_scope,
+        workspace_binding=binding,
     )
 
 

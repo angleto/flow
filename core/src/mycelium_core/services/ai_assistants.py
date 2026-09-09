@@ -27,8 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mycelium_core.concurrency import optimistic_update
 from mycelium_core.errors import DomainError, NotFoundError
 from mycelium_core.i18n import MessageCode
-from mycelium_core.mcp_scopes import DEFAULT_SCOPES, VALID_SCOPE_KEYS
-from mycelium_core.models.agent_token import AgentToken
+from mycelium_core.mcp_scopes import DEFAULT_SCOPES, SELF_SERVICE_SCOPES, VALID_SCOPE_KEYS
+from mycelium_core.models.agent_token import AgentToken, WorkspaceBinding
 from mycelium_core.models.ai_assistant import AiAssistant, AssistantRuntime
 from mycelium_core.models.membership import Role
 from mycelium_core.services import actors as actors_svc
@@ -65,6 +65,61 @@ def _validate_scope(scope: Sequence[str]) -> list[str]:
     return out
 
 
+def _is_self_service(scope: Sequence[str]) -> bool:
+    """Whether a credential with this scope may be minted, managed and
+    revoked by any member for themselves, rather than by the workspace
+    owner.
+
+    Minting a long-lived bearer secret is owner-gated, and that is the
+    right threshold for an assistant whose scope reaches most of the
+    workspace. It is the wrong one for the browser panel: the product
+    tells every reader to install it, the panel can do a fixed narrow
+    subset of what its holder can already do, and the settings page has
+    said "installing this is not an administrative act" while the server
+    refused anyone but the owner. One of the two had to become true.
+
+    The test is on the CAPABILITY, so it cannot be talked around: the
+    provider string is chosen by the caller and decides nothing, and a
+    request for one key outside the set is an assistant again, owner-gated
+    as before.
+    """
+    return set(scope) <= SELF_SERVICE_SCOPES
+
+
+async def _require_mint_role(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    actor_id: uuid.UUID,
+    scope: Sequence[str],
+) -> None:
+    """The threshold for creating or holding a credential with this scope."""
+    await require_role(
+        session,
+        org_id,
+        actor_id,
+        Role.member if _is_self_service(scope) else Role.owner,
+    )
+
+
+async def _binding_of(session: AsyncSession, *, assistant_id: uuid.UUID) -> WorkspaceBinding:
+    """The tenancy of the credential that currently stands for this
+    assistant. Read from the live token rather than remembered on the
+    assistant row, because the token is what a request authenticates
+    with and there must be one answer, not two that can disagree."""
+    row = (
+        await session.execute(
+            select(AgentToken.workspace_binding)
+            .where(
+                AgentToken.assistant_id == assistant_id,
+                AgentToken.revoked_at.is_(None),
+            )
+            .order_by(AgentToken.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row if row is not None else WorkspaceBinding.workspace
+
+
 async def create_assistant(
     session: AsyncSession,
     *,
@@ -76,12 +131,31 @@ async def create_assistant(
     model_id: str | None = None,
     notes: str | None = None,
     runtime: AssistantRuntime = AssistantRuntime.external,
+    workspace_binding: WorkspaceBinding = WorkspaceBinding.workspace,
 ) -> AssistantWithSecret:
     """Create an assistant + its first agent_token in one atomic flush.
-    Owner-gated. ``raw_secret`` returned exactly once; the operator
-    pastes it into Claude / Cursor and the DB only holds its hash."""
-    await require_role(session, org_id, actor_id, Role.owner)
+    ``raw_secret`` returned exactly once; the operator pastes it into
+    Claude / Cursor and the DB only holds its hash.
+
+    Owner-gated, unless the requested scope is one a member may grant
+    themselves (see ``_is_self_service``). The scope is therefore
+    validated BEFORE the gate: what is being asked for decides who may
+    ask for it."""
     eff_scope = _validate_scope(scope if scope is not None else list(DEFAULT_SCOPES))
+    if workspace_binding is WorkspaceBinding.account and not _is_self_service(eff_scope):
+        # A credential that reaches every workspace its holder belongs to
+        # is only offered for the narrow, fixed set. Wider than that and
+        # the reach of the secret stops being proportionate to what it
+        # can do with it -- and this is refused rather than quietly
+        # narrowed, because a caller that asked for account reach and got
+        # workspace reach would look connected and then fail one
+        # workspace later.
+        extra = sorted(set(eff_scope) - SELF_SERVICE_SCOPES)
+        raise DomainError(
+            MessageCode.AI_ASSISTANT_BINDING_TOO_WIDE,
+            key=", ".join(extra),
+        )
+    await _require_mint_role(session, org_id, actor_id, eff_scope)
     row = AiAssistant(
         org_id=org_id,
         user_id=actor_id,
@@ -109,6 +183,10 @@ async def create_assistant(
         actor_id=actor_id,
         name=label,
         assistant_id=row.id,
+        workspace_binding=workspace_binding,
+        # Already checked, above, against what this credential may do.
+        # Passing it again here would let the two thresholds disagree.
+        minimum_role=Role.member if _is_self_service(eff_scope) else Role.owner,
     )
     await audit.log(
         session,
@@ -174,11 +252,18 @@ async def update_assistant(
     is_active: bool | None = None,
     runtime: AssistantRuntime | None = None,
 ) -> int:
-    """Patch an assistant. Owner-gated, optimistic concurrency. The
-    bound token row stays unchanged — for a secret rotation use
-    ``rotate_secret``."""
-    await require_role(session, org_id, actor_id, Role.owner)
-    await get_assistant(session, org_id=org_id, user_id=actor_id, assistant_id=assistant_id)
+    """Patch an assistant. Optimistic concurrency. The bound token row
+    stays unchanged — for a secret rotation use ``rotate_secret``.
+
+    Owner-gated, unless BOTH what the assistant can do today and what it
+    is being asked to become are self-service. Checking only the current
+    row would make a widening patch the way around the mint threshold."""
+    current = await get_assistant(
+        session, org_id=org_id, user_id=actor_id, assistant_id=assistant_id
+    )
+    await _require_mint_role(session, org_id, actor_id, current.scope_list())
+    if scope is not None:
+        await _require_mint_role(session, org_id, actor_id, _validate_scope(scope))
     values: dict[str, Any] = {}
     if label is not None:
         values["label"] = label
@@ -224,9 +309,13 @@ async def delete_assistant(
 ) -> None:
     """Hard-delete. Cascades to its bound agent_tokens (FK ON DELETE
     CASCADE in migration 0059), so the secret is invalidated atomically
-    with the row."""
-    await require_role(session, org_id, actor_id, Role.owner)
+    with the row.
+
+    Same threshold as minting, deliberately: a person who may create a
+    credential must be able to destroy it. The opposite pairing -- mint
+    without revoke -- is how a lost browser stays connected."""
     row = await get_assistant(session, org_id=org_id, user_id=actor_id, assistant_id=assistant_id)
+    await _require_mint_role(session, org_id, actor_id, row.scope_list())
     await session.delete(row)
     await session.flush()
     await audit.log(
@@ -249,9 +338,14 @@ async def rotate_secret(
     """Mint a new agent_token for this assistant and revoke every
     pre-existing one (cleanest audit trail: each rotation is a new
     row + a revoked_at on the old). Returns the fresh raw secret —
-    shown exactly once to the operator."""
-    await require_role(session, org_id, actor_id, Role.owner)
+    shown exactly once to the operator.
+
+    Same threshold as minting, and the new token inherits the tenancy of
+    the one it replaces: a rotation is a new secret for the same
+    credential, never a change to what that credential reaches."""
     row = await get_assistant(session, org_id=org_id, user_id=actor_id, assistant_id=assistant_id)
+    await _require_mint_role(session, org_id, actor_id, row.scope_list())
+    binding = await _binding_of(session, assistant_id=row.id)
     # Mint the new one first so a store failure on the old revoke
     # doesn't leave the assistant credential-less.
     mint = await agent_tokens.mint(
@@ -260,6 +354,8 @@ async def rotate_secret(
         actor_id=actor_id,
         name=row.label,
         assistant_id=row.id,
+        workspace_binding=binding,
+        minimum_role=Role.member if _is_self_service(row.scope_list()) else Role.owner,
     )
     # Revoke any previous (non-revoked) token for this assistant.
     prev = (

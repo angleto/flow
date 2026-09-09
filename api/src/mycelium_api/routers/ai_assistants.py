@@ -26,7 +26,7 @@ from mycelium_api.schemas import (
     ScopeCatalogEntry,
 )
 from mycelium_core.mcp_scopes import SCOPE_CATALOG
-from mycelium_core.models.agent_token import AgentToken
+from mycelium_core.models.agent_token import AgentToken, WorkspaceBinding
 from mycelium_core.models.ai_assistant import AiAssistant
 from mycelium_core.services import ai_assistants as svc
 
@@ -68,12 +68,17 @@ async def scope_catalog(
     ]
 
 
-async def _latest_prefix(ctx: TenantCtx, assistant_id: uuid.UUID) -> str | None:
-    """First chars of the most recent non-revoked token for this
-    assistant (UI uses it to disambiguate which rotation is live)."""
+async def _latest_token(
+    ctx: TenantCtx, assistant_id: uuid.UUID
+) -> tuple[str | None, WorkspaceBinding]:
+    """The live credential behind this assistant: the first chars of its
+    secret (so the UI can tell one rotation from another) and what it
+    reaches. Both come from the same row, in one query, because they are
+    two facts about one credential and reading them apart is how they
+    come to disagree."""
     row = (
         await ctx.session.execute(
-            select(AgentToken.prefix)
+            select(AgentToken.prefix, AgentToken.workspace_binding)
             .where(
                 AgentToken.assistant_id == assistant_id,
                 AgentToken.revoked_at.is_(None),
@@ -81,11 +86,17 @@ async def _latest_prefix(ctx: TenantCtx, assistant_id: uuid.UUID) -> str | None:
             .order_by(AgentToken.created_at.desc())
             .limit(1)
         )
-    ).scalar_one_or_none()
-    return row
+    ).first()
+    if row is None:
+        return None, WorkspaceBinding.workspace
+    return row[0], row[1]
 
 
-def _out(a: AiAssistant, token_prefix: str | None) -> AiAssistantOut:
+def _out(
+    a: AiAssistant,
+    token_prefix: str | None,
+    workspace_binding: WorkspaceBinding = WorkspaceBinding.workspace,
+) -> AiAssistantOut:
     return AiAssistantOut(
         id=a.id,
         label=a.label,
@@ -99,6 +110,7 @@ def _out(a: AiAssistant, token_prefix: str | None) -> AiAssistantOut:
         created_at=a.created_at,
         updated_at=a.updated_at,
         token_prefix=token_prefix,
+        workspace_binding=workspace_binding,
     )
 
 
@@ -109,8 +121,8 @@ async def list_assistants(
     rows = await svc.list_assistants(ctx.session, org_id=ctx.org_id, user_id=ctx.user_id)
     out: list[AiAssistantOut] = []
     for a in rows:
-        prefix = await _latest_prefix(ctx, a.id)
-        out.append(_out(a, prefix))
+        prefix, binding = await _latest_token(ctx, a.id)
+        out.append(_out(a, prefix, binding))
     return out
 
 
@@ -129,9 +141,10 @@ async def create_assistant(
         model_id=body.model_id,
         notes=body.notes,
         runtime=body.runtime,
+        workspace_binding=body.workspace_binding,
     )
     return AiAssistantCreatedOut(
-        assistant=_out(res.assistant, res.token_prefix),
+        assistant=_out(res.assistant, res.token_prefix, body.workspace_binding),
         raw_secret=res.raw_secret,
     )
 
@@ -147,7 +160,8 @@ async def get_assistant(
         user_id=ctx.user_id,
         assistant_id=assistant_id,
     )
-    return _out(row, await _latest_prefix(ctx, row.id))
+    prefix, binding = await _latest_token(ctx, row.id)
+    return _out(row, prefix, binding)
 
 
 @router.patch("/{assistant_id}", response_model=AiAssistantOut)
@@ -176,7 +190,8 @@ async def patch_assistant(
         user_id=ctx.user_id,
         assistant_id=assistant_id,
     )
-    return _out(row, await _latest_prefix(ctx, row.id))
+    prefix, binding = await _latest_token(ctx, row.id)
+    return _out(row, prefix, binding)
 
 
 @router.delete("/{assistant_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -19,8 +19,9 @@ Each ``(METHOD, path-template)`` maps to one of:
   account/session/MFA, workspace and member administration, and above all
   the credential and assistant routes, since an assistant that can PATCH its
   own row could simply widen its own scope and undo the whole boundary;
-- ``META`` -- authenticated and tenant-scoped, but callable under any scope
-  including the empty one. Exactly one route, ``GET /agent/self``.
+- ``META`` -- authenticated, callable under any scope including the empty one:
+  ``GET /agent/self`` (tenant-scoped) and ``GET /agent/workspaces``
+  (pre-tenant, the workspaces the credential may act in).
 
 FAIL-CLOSED: a route absent from the map is denied to a scoped assistant. A
 drift-guard test asserts the map covers the live route table exactly, so a
@@ -95,8 +96,11 @@ from __future__ import annotations
 PUBLIC: object = object()
 HUMAN_ONLY: object = object()
 
-# META: authenticated, tenant-scoped, and callable under ANY scope --
-# including the empty one. Exactly one route holds it, ``GET /agent/self``,
+# META: authenticated and callable under ANY scope -- including the empty
+# one. Two routes hold it, ``GET /agent/self`` and ``GET
+# /agent/workspaces`` (the second is pre-tenant, because a credential
+# that may act in several workspaces has to be able to ask which before
+# it can name one),
 # and the reason it must not be a scope key is circular: a client cannot
 # ask what it may do if asking is itself something it may not do. It then
 # either hardcodes the list it was minted with, which drifts silently the
@@ -244,6 +248,11 @@ ROUTE_SCOPES: dict[tuple[str, str], object] = {
     ("POST", "/auth/login-mfa"): PUBLIC,
     ("POST", "/auth/logout"): HUMAN_ONLY,
     ("GET", "/agent/self"): META,
+    # Same reason as /agent/self, one question earlier: a credential that
+    # may act in several workspaces cannot name one until it knows which
+    # ones it may name. Pre-tenant, so it takes no X-Workspace-Id, and it
+    # answers only about the caller's own workspaces.
+    ("GET", "/agent/workspaces"): META,
     ("GET", "/auth/me"): HUMAN_ONLY,
     ("PATCH", "/auth/me"): HUMAN_ONLY,
     ("GET", "/auth/me/avatar"): HUMAN_ONLY,

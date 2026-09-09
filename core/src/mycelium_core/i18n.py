@@ -241,6 +241,7 @@ class MessageCode(enum.StrEnum):
     CAPABILITY_TOKEN_SCOPE = "capability_token.scope"  # noqa: S105 (message code, not a secret)
     AI_ASSISTANT_NOT_FOUND = "ai_assistant.not_found"
     AI_ASSISTANT_INVALID_SCOPE = "ai_assistant.invalid_scope"
+    AI_ASSISTANT_BINDING_TOO_WIDE = "ai_assistant.binding_too_wide"
     NOTE_MATURITY_INVALID = "note.maturity_invalid"
     NOTE_PROMOTED_READONLY = "note.promoted_readonly"
     NOTE_PROTECTED = "note.protected"
@@ -719,6 +720,10 @@ _CATALOG: dict[str, dict[MessageCode, str]] = {
         MessageCode.AGENT_TOKEN_NOT_FOUND: "Agent token not found",
         MessageCode.AI_ASSISTANT_NOT_FOUND: "AI assistant not found",
         MessageCode.AI_ASSISTANT_INVALID_SCOPE: ("Unknown scope key: {key}"),
+        MessageCode.AI_ASSISTANT_BINDING_TOO_WIDE: (
+            "A credential that reaches every workspace is offered only for the "
+            "browser panel's scope. Remove {key} or bind it to one workspace."
+        ),
         MessageCode.AGENT_TOKEN_INVALID: "Invalid or revoked agent token",
         MessageCode.CAPABILITY_TOKEN_INVALID: (
             "Invalid, expired, or already-used capability token"

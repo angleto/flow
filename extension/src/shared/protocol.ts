@@ -79,6 +79,12 @@ export interface Connection {
   workspaceName: string
   assistantId: string
   scope: string[]
+  /** Which workspaces the credential behind this row reaches, as the
+   *  SERVER reports it. ``account`` rows share one secret across every
+   *  workspace their holder belongs to, so there is one row per
+   *  workspace and one credential behind all of them -- which is why
+   *  revoking is per credential and forgetting is per row. */
+  binding?: 'workspace' | 'account'
   /** Set when the credential stopped authenticating, so the panel can
    *  say which workspace needs reconnecting rather than logging
    *  everything out. */

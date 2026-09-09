@@ -873,14 +873,16 @@ export const it: Catalog = {
       title: 'Collega questo browser',
       startFromExtension:
         'Una connessione parte sempre dall\'estensione: apri il pannello e premi Collega. Ti riporta qui per approvare, perché questa pagina è l\'unico posto che può mostrarti che cosa stai concedendo.',
-      asking: 'L\'estensione {{id}} chiede di collegarsi al workspace {{workspace}}.',
+      asking: 'L\'estensione {{id}} chiede di collegarsi ai tuoi workspace.',
       grantIntro:
         'Approvando crei per questo browser una credenziale che può fare esattamente questo e nient\'altro:',
+      reach:
+        'Raggiunge ogni workspace di cui fai parte, compresi quelli a cui ti unirai, e in ciascuno agisce come agisci tu: non può fare nulla che tu non possa già fare, e non può fare nulla in un workspace di cui non sei membro.',
       notGranted:
         'Non può leggere il tuo account, elencare gli altri workspace, creare o rinominare clienti e progetti, modificare i workflow, né cancellare nulla.',
       approve: 'Collega',
-      label: 'Estensione browser — {{workspace}}',
-      done: 'Collegato a {{workspace}}.',
+      label: 'Estensione browser',
+      done: 'Collegata. Il pannello si apre in {{workspace}} e può passare agli altri.',
       noRuntime:
         'La credenziale è stata creata ma questo browser non ha potuto consegnarla all\'estensione: la messaggistica delle estensioni Chrome non è disponibile su questa pagina. Revoca la credenziale qui sotto e riprova da un browser basato su Chromium con l\'estensione installata.',
       noReply:
@@ -889,7 +891,7 @@ export const it: Catalog = {
         'unknown-state':
           'L\'estensione non ha riconosciuto questa richiesta. Ricomincia dall\'estensione invece che da un link salvato.',
         expired: 'La richiesta è scaduta. Ricomincia dall\'estensione.',
-        'already-connected': 'Quell\'estensione è già collegata a questo workspace.',
+        'already-connected': 'Quell\'estensione è già collegata.',
         'wrong-origin': 'L\'estensione ha rifiutato una consegna da questo indirizzo.',
       },
     },

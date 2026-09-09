@@ -144,9 +144,20 @@ export function SettingsExtensionRoute() {
     setNotice(null)
     try {
       const created = await aiApi.create({
-        label: t('ext.connect.label', { workspace: ws.name }),
+        // Not named after a workspace: this credential is not one. The
+        // label is what the person recognises in the list of credentials
+        // when they come back to revoke it.
+        label: t('ext.connect.label'),
         provider: EXTENSION_PROVIDER,
         scope: [...EXTENSION_SCOPES],
+        // The panel sits over the account, not over one workspace: a
+        // person moves between their workspaces on one login, and one
+        // credential per workspace would put several long-lived secrets
+        // in the same browser profile to buy nothing. The server accepts
+        // this only for the scope list above, and every operation is
+        // still authorized by this person's own role in whichever
+        // workspace the request names.
+        workspace_binding: 'account',
       })
       const message: ConnectMessage = {
         kind: CONNECT_MESSAGE_KIND,
@@ -281,6 +292,7 @@ export function SettingsExtensionRoute() {
                 </li>
               ))}
             </ul>
+            <p className="hint">{t('ext.connect.reach')}</p>
             <p className="hint">{t('ext.connect.notGranted')}</p>
             <button type="button" disabled={busy || !ws} onClick={() => void onConnect()}>
               {t('ext.connect.approve')}

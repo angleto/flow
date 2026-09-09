@@ -130,4 +130,57 @@ describe('the connect handshake', () => {
     await acceptHandover(handover(await currentNonce()), ORIGIN)
     expect((await fake.session.peek()).nonce).toBeUndefined()
   })
+
+  it('files one row per workspace when the SERVER says the credential reaches them', async () => {
+    // The page is not asked and could not be trusted to answer: what a
+    // credential reaches is the server's fact about it, so the extension
+    // asks after the handover rather than reading a field out of it.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          binding: 'account',
+          workspaces: [
+            { id: 'ws-1', name: 'Personal', role: 'owner' },
+            { id: 'ws-2', name: 'Studio', role: 'guest' },
+          ],
+        }),
+      })),
+    )
+    await beginConnect()
+    await acceptHandover(handover(await currentNonce()), ORIGIN)
+    const bag = await fake.local.peek()
+    const first = bag['conn:ws-1'] as { secret: string; binding?: string; workspaceName: string }
+    const second = bag['conn:ws-2'] as { secret: string; binding?: string; workspaceName: string }
+    expect(second).toBeDefined()
+    expect(second.workspaceName).toBe('Studio')
+    // ONE credential behind both rows. The rows exist because everything
+    // the panel keeps -- recents, caches, the pinned task -- is per
+    // workspace; the secret is not.
+    expect(second.secret).toBe(first.secret)
+    expect([first.binding, second.binding]).toEqual(['account', 'account'])
+    vi.unstubAllGlobals()
+  })
+
+  it('stays connected to the one workspace when it cannot ask', async () => {
+    // A failed lookup is not a failed connection: the credential works,
+    // and the row for the workspace it was connected in is already
+    // stored. Anything else would turn a flaky network into a handover
+    // the person has to repeat.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('network')
+      }),
+    )
+    await beginConnect()
+    expect(await acceptHandover(handover(await currentNonce()), ORIGIN)).toEqual({ ok: true })
+    const bag = await fake.local.peek()
+    expect(bag['conn:ws-1']).toBeDefined()
+    expect(bag['conn:ws-2']).toBeUndefined()
+    vi.unstubAllGlobals()
+  })
 })

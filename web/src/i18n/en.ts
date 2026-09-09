@@ -878,13 +878,15 @@ export const en = {
       title: 'Connect this browser',
       startFromExtension:
         'A connection always starts in the extension: open the panel and press Connect. It brings you back here to approve, because this page is the only place that can show you what is being granted.',
-      asking: 'Extension {{id}} is asking to connect to the workspace {{workspace}}.',
+      asking: 'Extension {{id}} is asking to connect to your workspaces.',
       grantIntro: 'Approving mints a credential for this browser that can do exactly this and nothing else:',
+      reach:
+        'It reaches every workspace you belong to, including ones you join later, and in each it acts as you do there: it can do nothing you cannot do yourself, and nothing at all in a workspace you are not a member of.',
       notGranted:
-        'It cannot read your account, list your other workspaces, create or rename clients and projects, edit workflows, or delete anything.',
+        'It cannot read your account, change what you may do anywhere, create or rename clients and projects, edit workflows, or delete anything.',
       approve: 'Connect',
-      label: 'Browser extension — {{workspace}}',
-      done: 'Connected to {{workspace}}.',
+      label: 'Browser extension',
+      done: 'Connected. The panel opens in {{workspace}} and can switch to your others.',
       noRuntime:
         'The credential was created but this browser could not hand it to the extension. Chrome extension messaging is not available on this page. Revoke the credential below and try again from a Chromium-based browser with the extension installed.',
       noReply:
@@ -893,7 +895,7 @@ export const en = {
         'unknown-state':
           'The extension did not recognise this request. Start again from the extension rather than from a bookmarked link.',
         expired: 'The request timed out. Start again from the extension.',
-        'already-connected': 'That extension is already connected to this workspace.',
+        'already-connected': 'That extension is already connected.',
         'wrong-origin': 'The extension refused a handover from this address.',
       },
     },
