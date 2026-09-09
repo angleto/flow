@@ -851,12 +851,21 @@ export const it: Catalog = {
     install: {
       title: 'Installazione',
       store: 'Installa dal Chrome Web Store',
+      packaged:
+        'Non ancora pubblicata sul Chrome Web Store, quindi si installa a mano. Questo pacchetto è stato compilato qui, per qui: parla con {{origin}} e solo questo indirizzo può consegnargli una credenziale.',
+      download: 'Scarica l\'estensione ({{version}})',
+      checksum: 'SHA-256 dell\'archivio:',
+      unzip: 'Estrai l\'archivio. La cartella che ne esce è l\'estensione.',
       unpublished:
-        'Non ancora pubblicata sul Chrome Web Store. Fino ad allora si carica a mano da una build di questo repository:',
-      step1: 'Compila l\'estensione: esegui "pnpm build" nella cartella extension/.',
-      step2: 'Apri chrome://extensions e attiva la Modalità sviluppatore.',
-      step3: 'Scegli "Carica estensione non pacchettizzata" e seleziona extension/dist/unpacked.',
-      step4: 'Apri il pannello con Ctrl+Maiusc+K (Cmd+Maiusc+K su Mac), poi premi Collega.',
+        'Non ancora pubblicata sul Chrome Web Store, e questa installazione non serve nessun pacchetto: va compilata. Servono Node 22 e pnpm:',
+      buildHint:
+        'L\'origin qui sopra non è un dettaglio: decide con quale deployment parla il pacchetto e quale indirizzo può consegnargli una credenziale, e senza la build si ferma.',
+      devMode: 'Apri chrome://extensions e attiva la Modalità sviluppatore.',
+      loadUnzipped:
+        'Scegli "Carica estensione non pacchettizzata" e seleziona la cartella che hai estratto.',
+      loadBuilt:
+        'Scegli "Carica estensione non pacchettizzata" e seleziona extension/dist/unpacked.',
+      connect: 'Apri il pannello con Ctrl+Maiusc+K (Cmd+Maiusc+K su Mac), poi premi Collega.',
       chromeOnly:
         'Chrome e browser basati su Chromium (Edge, Brave, Arc). Firefox e Safari usano un formato diverso e non sono ancora supportati.',
     },

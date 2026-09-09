@@ -16,17 +16,32 @@ available to everyone: installing a browser extension is not an
 administrative act. It carries the install steps, the connect flow, the list
 of browsers currently connected, and the limits below.
 
-The item is not on the Chrome Web Store yet. Until it is, load it by hand:
+The item is not on the Chrome Web Store yet, so it installs by hand. There
+are two paths and the page picks between them for you.
+
+**When the deployment serves a package** it offers the archive for download.
+Unzip it, open `chrome://extensions`, switch on **Developer mode**, choose
+**Load unpacked**, and pick the folder you unzipped. Open the panel with
+`Ctrl+Shift+K` (`Cmd+Shift+K` on a Mac) and press **Connect**.
+
+The archive is served at `/extension/mycelium-extension-<version>.zip`,
+beside `/extension/release.json` which names the origin it was built for,
+both versions, and its SHA-256. The page shows the download **only if that
+origin is the one it is itself being served from**: an archive built for
+another deployment cannot receive a credential here, because the origin is
+compiled into its manifest, so offering it would be offering a dead end.
+
+**Otherwise** the page shows the build, with this deployment's origin already
+in the command:
 
 ```sh
-cd extension
+git clone https://github.com/angleto/mycelium
+cd mycelium/extension
 pnpm install
 MYCELIUM_EXTENSION_ORIGIN=https://mycelium.xeno.garden pnpm build
 ```
 
-Then open `chrome://extensions`, switch on **Developer mode**, choose **Load
-unpacked**, and pick `extension/dist/unpacked`. Open the panel with
-`Ctrl+Shift+K` (`Cmd+Shift+K` on a Mac) and press **Connect**.
+Then **Load unpacked** on `extension/dist/unpacked`.
 
 `MYCELIUM_EXTENSION_ORIGIN` has no default and the build fails without it. It
 decides three things at once — which deployment the package talks to, which
@@ -163,11 +178,22 @@ the app's own — a script there could read your session out of the page.
 |---|---|
 | `make extension-check` | the gate CI runs: lint, message catalogue, design tokens, typecheck, unit tests |
 | `MYCELIUM_EXTENSION_ORIGIN=… make extension-build` | `extension/dist/unpacked`, loadable |
-| `MYCELIUM_EXTENSION_ORIGIN=… make extension-pack` | `extension/dist/mycelium-extension-<version>.zip` |
+| `MYCELIUM_EXTENSION_ORIGIN=… make extension-zip` | `extension/dist/mycelium-extension-<version>.zip` and `release.json` |
 
-`extension-pack` refuses a non-https origin: the store would accept a
+`extension-zip` refuses a non-https origin: the store would accept a
 localhost build, and every installer would get an extension that talks to
-their own machine.
+their own machine. The script behind it is `pnpm zip` and not `pnpm pack`
+because `pack` is a pnpm built-in that shadows a script of that name — the
+target used to produce an npm tarball of the sources, silently, and never the
+archive it named.
+
+**A deployment serves its own archive.** The frontend image takes
+`MYCELIUM_EXTENSION_ORIGIN` as a build argument with no default: given one it
+builds the package and serves it under `/extension/`, given nothing it serves
+none and the settings page falls back to the build instructions. `docker
+build` without the argument therefore still produces a deployment-neutral
+image. In an image build the version comes from `MYCELIUM_VERSION` rather
+than from `git describe`, because the build context carries no `.git`.
 
 **The version comes from the release tag**, never from a file:
 `v2.3.10` becomes `2.3.10` in the manifest, and the full `git describe`
@@ -196,5 +222,6 @@ hostname.
 | The panel, shared by the popup and the side panel | `extension/src/ui/` |
 | The typed panel↔worker seam | `extension/src/shared/protocol.ts` |
 | Rules shared with the SPA (error envelope, entity code, recents, query grammar, handshake) | `web/src/shared/` |
-| The settings page and the connect flow | `web/src/routes/SettingsExtensionRoute.tsx` |
+| The settings page, the download and the connect flow | `web/src/routes/SettingsExtensionRoute.tsx` |
+| What a deployment publishes about its package | `extension/scripts/release.mjs`, read by `web/src/shared/extension.ts` |
 | The privacy statement the store listing points at | [`extension-privacy.md`](extension-privacy.md) |

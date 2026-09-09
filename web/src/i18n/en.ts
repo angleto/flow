@@ -857,12 +857,20 @@ export const en = {
     install: {
       title: 'Install',
       store: 'Install from the Chrome Web Store',
+      packaged:
+        'Not published to the Chrome Web Store yet, so it installs by hand. This package was built here, for here: it talks to {{origin}} and only this address can hand it a credential.',
+      download: 'Download the extension ({{version}})',
+      checksum: 'SHA-256 of the archive:',
+      unzip: 'Unzip the archive. The folder inside is the extension.',
       unpublished:
-        'Not published to the Chrome Web Store yet. Until it is, load it by hand from a build of this repository:',
-      step1: 'Build the extension: run "pnpm build" in the extension/ directory.',
-      step2: 'Open chrome://extensions and switch on Developer mode.',
-      step3: 'Choose "Load unpacked" and pick extension/dist/unpacked.',
-      step4: 'Open the panel with Ctrl+Shift+K (Cmd+Shift+K on a Mac), then press Connect.',
+        'Not published to the Chrome Web Store yet, and this deployment serves no package either, so it has to be built. It needs Node 22 and pnpm:',
+      buildHint:
+        'The origin above is not decoration: it decides which deployment the package talks to and which address may hand it a credential, and the build stops without it.',
+      devMode: 'Open chrome://extensions and switch on Developer mode.',
+      loadUnzipped: 'Choose "Load unpacked" and pick the folder you unzipped.',
+      loadBuilt: 'Choose "Load unpacked" and pick extension/dist/unpacked.',
+      connect:
+        'Open the panel with Ctrl+Shift+K (Cmd+Shift+K on a Mac), then press Connect.',
       chromeOnly:
         'Chrome and Chromium-based browsers (Edge, Brave, Arc). Firefox and Safari use a different extension format and are not supported yet.',
     },

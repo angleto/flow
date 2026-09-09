@@ -1,6 +1,7 @@
 # ADR-0057: The browser is a fourth surface, and it holds a scoped credential
 
-Status: Accepted (2026-09-03)
+Status: Accepted (2026-09-03). Amended 2026-09-09: a deployment serves its
+own package (see the amendment at the end).
 
 Relates to: ADR-0001 (one domain, thin adapters — this is a fourth adapter and
 holds no business logic), ADR-0003 (the unified typed tag, which is what a
@@ -205,3 +206,84 @@ to a response every client reads, and its real blocker is that the SPA's
 tasks route filters client-side over the fat `TaskOut` — moving that
 filtering server-side is its own piece of work. Recorded as a gap rather than
 half-done.
+
+## Amendment (2026-09-09): a deployment serves the package it can be installed from
+
+### Context
+
+The item is still not on the Chrome Web Store, so the settings page said to
+build it. The instruction it carried was not merely terse, it did not work:
+it named `pnpm build` in `extension/` and nothing else, while the build has
+no default origin and stops without `MYCELIUM_EXTENSION_ORIGIN`. Anyone
+following the screen got an error; the complete recipe lived only in
+`docs/extension.md`, which is not what somebody reads while looking at an
+install button. The screen also asked for a Node toolchain to install a
+browser extension, which is a strange thing to ask of the person the panel
+was written for.
+
+The obvious remedy -- publish one archive as a release asset and link it --
+is the one this design cannot take. The origin is compiled into the package:
+`host_permissions` and `externally_connectable` are static manifest
+declarations, so an archive is for exactly one deployment, and a link to a
+central copy would hand every self-hosted installer an extension talking to
+`mycelium.xeno.garden`. That is the failure the no-default-origin rule above
+exists to prevent, arriving by a different door.
+
+### Decision
+
+**A deployment serves its own package, or none.** The frontend image takes
+`MYCELIUM_EXTENSION_ORIGIN` as a build argument with no default. Given one,
+a stage builds `extension/` against it and the image serves
+`/extension/mycelium-extension-<version>.zip` beside a stable
+`/extension/release.json` naming the origin, both versions and the archive's
+SHA-256. Given nothing, the image serves neither and stays
+deployment-neutral, which is what a plain `docker build` still produces.
+
+**The page shows the download only when the descriptor names the origin the
+page is being served from.** Anything else -- no descriptor, a development
+server answering with the SPA shell, a package built for a sibling
+deployment -- reads as "no package", and the page then gives the build
+recipe with this deployment's origin already in the command. A button that
+leads to an extension Chrome would refuse to hand a credential is worse than
+no button.
+
+The descriptor is a contract between two packages built from two lockfiles,
+so `extension/tests/release.test.ts` asserts that what the pack step writes
+is what the SPA's reader accepts, field for field and in both directions. A
+renamed field would otherwise make the download quietly disappear, which
+looks exactly like a deployment that ships no package.
+
+### Consequences
+
+Installing still means "Load unpacked" with Developer mode on: Chrome does
+not install a zip by double-click, and a `.crx` outside the store is refused.
+What the download removes is the toolchain, which was the real obstacle.
+
+A frontend image built with the argument is bound to one deployment. That is
+new -- the image was previously neutral about where it is served -- and it is
+why the argument has no default and the workflow passes it only to that
+image.
+
+The deployment is the trust anchor for an unpacked install, since there is no
+store signature to check. The page therefore states the SHA-256 it published,
+and the descriptor's archive field is constrained to a bare file name so a
+descriptor cannot aim the download at another host.
+
+`make extension-pack` never produced an archive: `pnpm pack` is a pnpm
+built-in that shadowed the script of that name, so the target quietly built
+an npm tarball of the sources instead. The script is now `zip` and the target
+`make extension-zip`.
+
+### Alternatives rejected
+
+**One archive published as a GitHub release asset.** The reason above: it can
+only be correct for one deployment, and it is silently wrong for every other.
+
+**Serving the archive from the API rather than as a static file.** The bytes
+are produced by the image build and are the same for every reader; putting
+them behind an authenticated route would add a second answer to the question
+nginx already answers, and the package holds nothing a credential protects.
+
+**Reading the origin at runtime so one package could serve every
+deployment.** Not available: Chrome requires both the host permission and the
+`externally_connectable` pattern as static manifest entries.

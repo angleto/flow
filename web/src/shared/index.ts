@@ -59,12 +59,16 @@ export {
   tokenize,
 } from './query'
 
-export type { ConnectMessage, ConnectReply } from './extension'
+export type { ConnectMessage, ConnectReply, ExtensionRelease } from './extension'
 export {
   CONNECT_EXTENSION_ID_PARAM,
   CONNECT_MESSAGE_KIND,
   CONNECT_ROUTE,
   CONNECT_STATE_PARAM,
+  EXTENSION_PACKAGE_DIR,
   EXTENSION_PROVIDER,
+  EXTENSION_RELEASE_URL,
   EXTENSION_SCOPES,
+  extensionReleaseServes,
+  parseExtensionRelease,
 } from './extension'

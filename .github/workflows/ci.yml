@@ -196,8 +196,15 @@ jobs:
       # Last, and with the origin passed explicitly: there is no default,
       # so a build that reaches this step is a build that was told which
       # deployment it is for.
-      - name: Build
-        run: pnpm build
+      #
+      # `zip` rather than `build`: it runs the same build and then
+      # produces the archive a deployment serves for download, plus the
+      # descriptor beside it. The archive path had no gate at all until
+      # now, which is how the script behind `make extension-pack` came to
+      # be shadowed by pnpm's own `pack` built-in without anyone noticing
+      # that the target had stopped producing an archive.
+      - name: Build and package
+        run: pnpm zip
         env:
           MYCELIUM_EXTENSION_ORIGIN: https://mycelium.xeno.garden
 

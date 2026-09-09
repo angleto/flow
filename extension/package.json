@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "pack": "node scripts/build.mjs --zip",
+    "zip": "node scripts/build.mjs --zip",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",

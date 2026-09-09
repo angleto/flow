@@ -6,12 +6,14 @@
 // be deleted by a build that ran second.
 
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { readBuildEnv } from './env.mjs'
 import { manifestFor } from './manifest.mjs'
+import { RELEASE_FILE, releaseFor } from './release.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, 'dist', 'unpacked')
@@ -63,5 +65,14 @@ if (zip) {
   // the same input, which is what makes "rebuild it and compare" a
   // usable answer during a rollback.
   execFileSync('zip', ['-r', '-q', '-X', join(ZIP_DIR, name), '.'], { cwd: OUT, stdio: 'inherit' })
-  console.log(`extension: dist/${name}`)
+  // The descriptor a deployment serves beside the archive, so its
+  // settings page can offer the download and say which deployment the
+  // package inside talks to. Written from the same build environment as
+  // the manifest, for the same reason: two values that must agree are
+  // derived from one.
+  const sha256 = createHash('sha256').update(readFileSync(join(ZIP_DIR, name))).digest('hex')
+  const release = releaseFor(env, { zip: name, sha256 })
+  writeFileSync(join(ZIP_DIR, RELEASE_FILE), `${JSON.stringify(release, null, 2)}\n`)
+  console.log(`extension: dist/${name} (sha256 ${sha256})`)
+  console.log(`extension: dist/${RELEASE_FILE}`)
 }

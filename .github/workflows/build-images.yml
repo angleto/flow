@@ -24,6 +24,10 @@ on:
         description: "Image tag to push (e.g. 1.0.0, edge)"
         required: true
         default: "edge"
+      extension_origin:
+        description: "Origin the frontend's extension package is built for. Empty: ship no package."
+        required: false
+        default: "https://mycelium.xeno.garden"
   push:
     tags:
       - "v*"
@@ -107,6 +111,13 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
           GIT_SHA: ${{ steps.src.outputs.sha }}
           BUILT_AT: ${{ steps.src.outputs.built_at }}
+          # The frontend serves the extension package for the deployment
+          # it is deployed to, and the origin is compiled into that
+          # package: one image cannot serve two deployments' extensions.
+          # A tag push has no inputs, so the canonical deployment is the
+          # fallback; a build for anywhere else passes its own, or an
+          # empty value to ship no package at all.
+          EXT_ORIGIN: ${{ github.event.inputs.extension_origin || 'https://mycelium.xeno.garden' }}
         run: |
           set -euo pipefail
           for c in backend worker frontend sdi-inbound; do
@@ -118,8 +129,15 @@ jobs:
             # imported from :buildcache instead of rebuilt — fast builds, and
             # a stable layer digest so nodes re-pull only the thin app layer
             # (d11a0b0f). A missing :buildcache (first run) is a clean miss.
+            # Only the frontend has this argument, and passing it to a
+            # Dockerfile that does not declare it is a warning per build.
+            EXTRA=()
+            if [ "$c" = "frontend" ]; then
+              EXTRA+=(--build-arg MYCELIUM_EXTENSION_ORIGIN="$EXT_ORIGIN")
+            fi
             docker buildx build --platform linux/arm64 \
               -f docker/$c.Dockerfile \
+              "${EXTRA[@]}" \
               --build-arg MYCELIUM_VERSION="$TAG" \
               --build-arg MYCELIUM_GIT_SHA="$GIT_SHA" \
               --build-arg MYCELIUM_BUILD_AT="$BUILT_AT" \

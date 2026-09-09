@@ -7,11 +7,14 @@ import {
   CONNECT_STATE_PARAM,
   type ConnectMessage,
   type ConnectReply,
+  EXTENSION_PACKAGE_DIR,
   EXTENSION_PROVIDER,
   EXTENSION_SCOPES,
+  type ExtensionRelease,
 } from '../shared'
 import { useMyWorkspace } from '../auth/useMyWorkspace'
 import { type Assistant, type Scope, aiApi } from '../lib/aiAssistants'
+import { buildCommandsFor, loadRelease } from '../lib/extensionPackage'
 import { getTheme } from '../lib/theme'
 
 // Settings -> Browser extension.
@@ -74,6 +77,10 @@ export function SettingsExtensionRoute() {
   const [err, setErr] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // undefined while the probe is in flight. The two settled answers put
+  // opposite instructions on the screen, so rendering either one early
+  // would show a reader steps for the wrong path and then swap them.
+  const [release, setRelease] = useState<ExtensionRelease | null | undefined>(undefined)
 
   const reload = useCallback(async () => {
     try {
@@ -82,6 +89,17 @@ export function SettingsExtensionRoute() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
       setConnections([])
+    }
+  }, [])
+
+  useEffect(() => {
+    let live = true
+    void (async () => {
+      const found = await loadRelease()
+      if (live) setRelease(found)
+    })()
+    return () => {
+      live = false
     }
   }, [])
 
@@ -104,6 +122,8 @@ export function SettingsExtensionRoute() {
       live = false
     }
   }, [reload])
+
+  const buildCommands = useMemo(() => buildCommandsFor(window.location.origin), [])
 
   const granted = useMemo(() => {
     const byKey = new Map(catalog.map((s) => [s.key, s]))
@@ -209,14 +229,33 @@ export function SettingsExtensionRoute() {
               {t('ext.install.store')}
             </a>
           </p>
+        ) : release === undefined ? null : release ? (
+          <>
+            <p className="muted">{t('ext.install.packaged', { origin: release.origin })}</p>
+            <p>
+              <a href={`${EXTENSION_PACKAGE_DIR}${release.zip}`} download>
+                {t('ext.install.download', { version: release.versionName })}
+              </a>
+            </p>
+            <p className="hint ext__checksum">
+              {t('ext.install.checksum')} {release.sha256}
+            </p>
+            <ol>
+              <li>{t('ext.install.unzip')}</li>
+              <li>{t('ext.install.devMode')}</li>
+              <li>{t('ext.install.loadUnzipped')}</li>
+              <li>{t('ext.install.connect')}</li>
+            </ol>
+          </>
         ) : (
           <>
             <p className="muted">{t('ext.install.unpublished')}</p>
+            <pre className="ext__commands">{buildCommands}</pre>
+            <p className="hint">{t('ext.install.buildHint')}</p>
             <ol>
-              <li>{t('ext.install.step1')}</li>
-              <li>{t('ext.install.step2')}</li>
-              <li>{t('ext.install.step3')}</li>
-              <li>{t('ext.install.step4')}</li>
+              <li>{t('ext.install.devMode')}</li>
+              <li>{t('ext.install.loadBuilt')}</li>
+              <li>{t('ext.install.connect')}</li>
             </ol>
           </>
         )}

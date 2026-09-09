@@ -98,3 +98,66 @@ export interface ConnectReply {
    *  say something better than "it did not work". */
   reason?: 'unknown-state' | 'expired' | 'already-connected' | 'wrong-origin'
 }
+
+/** Where a deployment publishes the package it serves, and the descriptor
+ *  that says what that package is.
+ *
+ *  The origin the extension talks to is compiled into it: `host_permissions`
+ *  and `externally_connectable` are static manifest declarations, so one
+ *  archive cannot serve two deployments, and an archive published centrally
+ *  would point every installer at whichever deployment built it. The
+ *  deployment therefore serves its own, and the page shows the download only
+ *  when the descriptor names the origin the page is itself being served
+ *  from: offering one that could not connect is worse than offering none.
+ *
+ *  The producer is `extension/scripts/release.mjs`, in the other package.
+ *  Both directions are asserted by `extension/tests/release.test.ts`. */
+export const EXTENSION_PACKAGE_DIR = '/extension/'
+export const EXTENSION_RELEASE_URL = `${EXTENSION_PACKAGE_DIR}release.json`
+
+export interface ExtensionRelease {
+  /** The deployment the package inside the archive talks to, and the only
+   *  origin that can hand it a credential. */
+  origin: string
+  /** What Chrome compares (`2.3.10`) and what a person reads on
+   *  chrome://extensions (`v2.3.10-3-gabc1234`). */
+  version: string
+  versionName: string
+  /** File name only, resolved against EXTENSION_PACKAGE_DIR. */
+  zip: string
+  sha256: string
+}
+
+/** A file name and nothing else. The page turns this value into a link, so
+ *  a descriptor must not be able to aim that link at a path of its own
+ *  choosing, or at another host. */
+const ZIP_NAME = /^[A-Za-z0-9._-]+\.zip$/
+const SHA256 = /^[0-9a-f]{64}$/
+
+/** Reads a descriptor, or answers null for anything that is not one.
+ *
+ *  Null is the ordinary case, not an error: a deployment built without an
+ *  extension origin serves no package, and a development server answers
+ *  this path with the SPA shell. Both arrive here as "not a descriptor",
+ *  and the page falls back to the build instructions. */
+export function parseExtensionRelease(value: unknown): ExtensionRelease | null {
+  if (typeof value !== 'object' || value === null) return null
+  const raw = value as Record<string, unknown>
+  const { origin, version, versionName, zip, sha256 } = raw
+  if (typeof origin !== 'string' || typeof version !== 'string') return null
+  if (typeof versionName !== 'string' || typeof zip !== 'string') return null
+  if (typeof sha256 !== 'string') return null
+  if (!origin || !version || !versionName) return null
+  if (!ZIP_NAME.test(zip) || !SHA256.test(sha256)) return null
+  return { origin, version, versionName, zip, sha256 }
+}
+
+/** Whether this package is the one for the deployment being read.
+ *
+ *  A string comparison of two origins, which is what `location.origin` and
+ *  a manifest pattern are both derived from. Anything looser (host only,
+ *  suffix matching) would accept a package built for a sibling deployment
+ *  that the browser would then refuse to connect. */
+export function extensionReleaseServes(release: ExtensionRelease, origin: string): boolean {
+  return release.origin === origin
+}

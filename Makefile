@@ -50,11 +50,17 @@ extension-check:
 extension-build:
 	cd extension && pnpm build
 
-# The upload artifact. Refuses a non-https origin: the store would accept
-# a localhost build and every installer would get an extension talking to
+# The archive: the upload artifact, and what a deployment serves for
+# download. Refuses a non-https origin, because the store would accept a
+# localhost build and every installer would get an extension talking to
 # their own machine.
-extension-pack:
-	cd extension && pnpm pack
+#
+# The script is `zip` and not `pack` because `pnpm pack` is a BUILT-IN
+# that shadows a script of that name: this target used to produce an npm
+# tarball of the package sources, silently, and never the archive it
+# names.
+extension-zip:
+	cd extension && pnpm zip
 
 # Offline retrieval eval gate (ADR-0035 / Mycelio WS-E1): deterministic
 # gold-set recall@k/MRR + dense-tier health over the real pipeline. Runs

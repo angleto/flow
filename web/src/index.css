@@ -6900,3 +6900,23 @@ button.btn--danger:hover {
 .ext__list button {
   margin-left: auto;
 }
+/* The build commands, shown when this deployment serves no package. A
+   person copies them into a terminal, so the whitespace is the content:
+   wrapping a long origin mid-token would produce a command that looks
+   right and is not. It scrolls sideways instead. */
+.ext__commands {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+  margin: 0.6rem 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+.ext__checksum {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
