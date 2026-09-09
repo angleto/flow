@@ -14,6 +14,7 @@ import {
 } from '../shared'
 import { useMyWorkspace } from '../auth/useMyWorkspace'
 import { type Assistant, type Scope, aiApi } from '../lib/aiAssistants'
+import { chromeRuntime, handOver } from '../lib/extensionMessaging'
 import { buildCommandsFor, loadRelease } from '../lib/extensionPackage'
 import { getTheme } from '../lib/theme'
 
@@ -43,25 +44,6 @@ import { getTheme } from '../lib/theme'
 // Null until it is published, and the page then tells the truth about
 // that rather than linking somewhere that 404s.
 const STORE_URL: string | null = null
-
-/** Just enough of the extension messaging API to hand over one secret.
- *  Declared locally rather than by adding @types/chrome to the whole SPA:
- *  this is the only file that touches it, and the surface it needs is two
- *  functions wide. */
-type ChromeRuntime = {
-  runtime?: {
-    sendMessage?: (
-      extensionId: string,
-      message: unknown,
-      callback: (reply: ConnectReply | undefined) => void,
-    ) => void
-    lastError?: { message?: string }
-  }
-}
-
-function chromeRuntime(): ChromeRuntime['runtime'] | undefined {
-  return (globalThis as unknown as ChromeRuntime).runtime
-}
 
 export function SettingsExtensionRoute() {
   const { t } = useTranslation()
@@ -179,9 +161,7 @@ export function SettingsExtensionRoute() {
         await reload()
         return
       }
-      const reply = await new Promise<ConnectReply | undefined>((resolve) => {
-        runtime.sendMessage?.(requestExtensionId, message, resolve)
-      })
+      const { reply, lastError } = await handOver(runtime, requestExtensionId, message)
       if (!reply?.ok) {
         // Static t() calls, one per reason, rather than a key built from
         // the reason: the i18n gate can only verify a key it can read in
@@ -196,7 +176,7 @@ export function SettingsExtensionRoute() {
         setErr(
           reply?.reason
             ? refusal[reply.reason]()
-            : (runtime.lastError?.message ?? t('ext.connect.noReply')),
+            : (lastError ?? t('ext.connect.noReply')),
         )
         await reload()
         return
