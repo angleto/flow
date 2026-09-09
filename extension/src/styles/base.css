@@ -100,6 +100,17 @@ body {
   color: var(--bark);
 }
 
+/* The workspace chip, when there is more than one to switch to. A
+   <select> so the platform's own picker opens (and reads correctly to a
+   screen reader) rather than a menu this panel would have to build; the
+   chip appearance is shared with the static case so the line does not
+   change shape when a second workspace appears. */
+.hypha__ws-pick {
+  font: inherit;
+  appearance: none;
+  cursor: pointer;
+}
+
 .hypha__chip--client {
   border-color: var(--accent);
   color: var(--accent);

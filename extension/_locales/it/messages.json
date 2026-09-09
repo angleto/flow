@@ -304,5 +304,8 @@
   },
   "refresh": {
     "message": "Aggiorna"
+  },
+  "workspaceLabel": {
+    "message": "Workspace"
   }
 }

@@ -138,7 +138,35 @@ export function mountPanel(root: HTMLElement, host: Host): void {
     clear(scopeBar)
     const conn = current()
     if (!conn) return
-    scopeBar.appendChild(el('span', { class: 'hypha__chip hypha__chip--ws', text: conn.workspaceName }))
+    // The workspace, and a way to change it when there is more than one
+    // to change to. One credential now reaches every workspace its
+    // holder belongs to, so the panel would otherwise open in whichever
+    // one it was connected in and offer no way out of it. With a single
+    // workspace it stays a chip: a select with one option is a control
+    // that does nothing.
+    if (state.connections.length > 1) {
+      const picker = el('select', {
+        class: 'hypha__chip hypha__chip--ws hypha__ws-pick',
+        'aria-label': m('workspaceLabel'),
+      }) as HTMLSelectElement
+      for (const row of state.connections) {
+        const option = el('option', { value: row.workspaceId, text: row.workspaceName })
+        if (row.workspaceId === conn.workspaceId) option.setAttribute('selected', '')
+        picker.appendChild(option)
+      }
+      picker.addEventListener('change', () => {
+        // The focus is a selection INSIDE a workspace (a client, a
+        // project), so it cannot survive the move: carrying it over
+        // would pin a filter naming something the new workspace does
+        // not have.
+        void setScope({ workspaceId: picker.value, focus: null })
+      })
+      scopeBar.appendChild(picker)
+    } else {
+      scopeBar.appendChild(
+        el('span', { class: 'hypha__chip hypha__chip--ws', text: conn.workspaceName }),
+      )
+    }
     // What the LAST search actually ran under, falling back to the
     // pinned selection before one has run. An inline `in:` overrides for
     // one query and never writes the pinned scope, so reading the chips
