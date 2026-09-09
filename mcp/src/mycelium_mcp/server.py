@@ -12,7 +12,7 @@ import base64
 import datetime as dt
 import json
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from decimal import Decimal, InvalidOperation
@@ -8381,7 +8381,11 @@ async def task_workflow(token: str, org_id: str, task_id: str) -> dict[str, Any]
         }
 
 
-def _allowed_next(states, transitions, current):  # type: ignore[no-untyped-def]
+def _allowed_next(
+    states: Sequence[WorkflowState],
+    transitions: Sequence[WorkflowTransition],
+    current: WorkflowState | None,
+) -> list[dict[str, Any]]:
     """The states one transition away from ``current``, in the board's order.
 
     A module-level function rather than a comprehension inside the tool

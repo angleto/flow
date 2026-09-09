@@ -36,6 +36,19 @@ from mycelium_core.services import audit, billing, taxonomy
 from mycelium_core.services.chunker import Chunker
 from mycelium_core.services.rbac import require_role
 
+# The perimeter type lives in the retrieval layer, which is where it is
+# carried (``RetrievalContext.project_id``) and where the predicate that
+# reads it is built. Re-exported here because this module is the address
+# every caller already knows it by, and because a caller naming a
+# perimeter is asking this service a question, not the pipeline.
+from mycelium_core.services.retrieval.types import (
+    ANY_PROJECT as ANY_PROJECT,
+)
+from mycelium_core.services.retrieval.types import (
+    ProjectScope,
+    _AnyProject,
+)
+
 _RRF_K = 60
 _OVERSAMPLE = 50
 # Tiered fusion weights. The signals are ranked by precision: an EXACT
@@ -292,41 +305,7 @@ async def _resolve_channel_tag_id(
     return tag.id
 
 
-class _AnyProject:
-    """Sentinel: retrieve across every project perimeter rather than one.
-
-    ``project_id=None`` already means something, and it is not this: it is
-    the NULL perimeter, where task blobs deliberately live so that they stay
-    org-wide. Three services mirror that reading in their own docstrings, so
-    None keeps it.
-
-    What was missing is the third case. A caller asking "what did we decide
-    about X" does not know which project it was decided in -- that is the
-    question -- and until this sentinel the API had no way to say so.
-
-    The cost was measured on 2026-09-07 and the split is the whole story. A
-    gold set of twenty such questions retrieved 3 at k=5. Tasks scored 3 of
-    6, because task blobs carry ``project_id=NULL`` and the NULL perimeter is
-    exactly what an unscoped search searched. Notes scored **0 of 14**,
-    because a note blob carries its note's project and no unscoped search
-    could reach one. Not ranking and not embeddings: a perimeter the caller
-    had no way to name.
-    """
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return "ANY_PROJECT"
-
-
-#: Pass as ``project_id`` to search every perimeter in the org.
-ANY_PROJECT = _AnyProject()
-
-#: What a retrieval perimeter can be: one project, the NULL perimeter, or all.
-ProjectScope = uuid.UUID | None | _AnyProject
-
-
-def _project_pred(project_id: ProjectScope):  # type: ignore[no-untyped-def]
+def _project_pred(project_id: ProjectScope) -> ColumnElement[bool]:
     if isinstance(project_id, _AnyProject):
         # No perimeter clause at all. Org scoping is applied by the caller and
         # is what bounds the search; a project is a retrieval perimeter and
