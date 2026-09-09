@@ -5162,15 +5162,33 @@ def _note_part(p: Any) -> dict[str, Any]:
         "lang": p.lang,
         "merged_from_note_id": (str(p.merged_from_note_id) if p.merged_from_note_id else None),
         "version": p.version,
+        # Who wrote it and when. The columns were always there
+        # (``created_by`` since migration 0010, the timestamps since
+        # the model was written) and this projection dropped them, so a
+        # caller could order a note's blocks and not tell whose they
+        # were or which had arrived since it last looked -- the two
+        # questions a shared work note exists to answer.
+        "created_by": (str(p.created_by) if p.created_by else None),
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
     }
 
 
 def _note_part_outline(p: Any) -> dict[str, Any]:
     """Body-free projection of a NotePart for the outline / table of
-    contents of a long note: id, ord, title, lang, UTF-8 byte length and
-    the first non-empty line (``head``). Lets an LLM pick which part to
-    read or edit without pulling every body into context (the get_note /
-    list_note_parts payload-economy primitive)."""
+    contents of a long note: id, ord, title, lang, UTF-8 byte length,
+    the first non-empty line (``head``), and who wrote it when. Lets an
+    LLM pick which part to read or edit without pulling every body into
+    context (the get_note / list_note_parts payload-economy primitive).
+
+    ``created_by`` / ``created_at`` are what make this an *incremental*
+    read rather than only a cheap one. An agent that noted the newest
+    ``created_at`` it had seen can pick out the blocks that arrived
+    since, and tell its own from another agent's, from the outline
+    alone -- without fetching a single body. That is the operation both
+    a scratchpad recovered after compaction and a work note shared
+    between agents perform first, and it used to require pulling every
+    body to answer."""
     body = p.body or ""
     head = next((ln.strip() for ln in body.splitlines() if ln.strip()), "")
     return {
@@ -5182,6 +5200,9 @@ def _note_part_outline(p: Any) -> dict[str, Any]:
         "bytes": len(body.encode("utf-8")),
         "head": head[:120],
         "version": p.version,
+        "created_by": (str(p.created_by) if p.created_by else None),
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
     }
 
 
@@ -5831,10 +5852,28 @@ async def merge_notes(
 
 
 @mcp.tool()
-async def get_or_create_task_note(token: str, org_id: str, task_id: str) -> dict[str, Any]:
+async def get_or_create_task_note(
+    token: str, org_id: str, task_id: str, include_part_bodies: bool = True
+) -> dict[str, Any]:
     """Open a task's "work note" (creating it on first call). Idempotent:
     repeated calls return the same note. Time spent on the note is billed
-    to the task via the task-scoped timer."""
+    to the task via the task-scoped timer.
+
+    This is the task's scratch surface: work in progress goes here
+    instead of into the task description, so the task stays a task and
+    the rough copy still has a home that outlives a session. Append with
+    ``add_note_part`` (or the token-free stream from
+    ``add_note_part_instructions``), which never reads the note back.
+
+    ``include_part_bodies=False`` returns the OUTLINE -- per-part id,
+    ord, title, byte-length, head, and who wrote it when -- with no
+    bodies and no derived transcript, then fetch only what you need with
+    ``get_note_part``. Use it whenever the note is not new: a scratchpad
+    grows without bound, and the default full read is exactly the cost
+    a scratchpad is supposed to avoid. It is also how a second agent
+    finds what the others added without pulling their work into its own
+    context: compare ``created_at`` against the newest block it had
+    already seen."""
     async with _tenant(token, org_id) as (s, org, user):
         n = await notes_svc.get_or_create_work_note(
             s,
@@ -5844,8 +5883,14 @@ async def get_or_create_task_note(token: str, org_id: str, task_id: str) -> dict
         )
         tagmap = await notes_svc.tags_by_note(s, note_ids=[n.id])
         pid = await note_links_svc.primary_task_id_for_note(s, org_id=org, note_id=n.id)
-        body = await notes_svc.get_body(s, note_id=n.id)
-        return _note(n, tagmap.get(n.id, []), primary_task_id=pid, transcript=body)
+        parts = await note_parts_svc.list_parts(s, org_id=org, note_id=n.id)
+        return _note(
+            n,
+            tagmap.get(n.id, []),
+            primary_task_id=pid,
+            parts=parts,
+            part_bodies=include_part_bodies,
+        )
 
 
 @mcp.tool()

@@ -36,6 +36,7 @@ from mycelium_core.concurrency import optimistic_update
 from mycelium_core.config import get_settings
 from mycelium_core.errors import ConflictError, DomainError, NotFoundError
 from mycelium_core.i18n import MessageCode
+from mycelium_core.models.identity import Identity
 from mycelium_core.models.membership import Role
 from mycelium_core.models.note import Note
 from mycelium_core.models.note_part import NotePart, NotePartTrash, NotePartUIState
@@ -301,6 +302,35 @@ async def _assert_not_promoted(
         raise DomainError(MessageCode.NOTE_PROMOTED_READONLY)
 
 
+async def _actor_identity_id(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_id: uuid.UUID,
+) -> uuid.UUID | None:
+    """Resolve the caller's Identity row in this org (ADR-0028).
+
+    The twin of ``note_links._actor_identity_id`` and it exists for the
+    same reason: ``actor_id`` throughout these services is a ``users``
+    id, while every ``created_by`` in the note family is an Identity --
+    a user or an ai_assistant. Writing the actor straight into the
+    column is a foreign key violation, which is how this was found.
+
+    Returns None when the actor has no Identity in the workspace. The
+    column is nullable precisely so that an absence is recordable
+    rather than fatal: attribution is worth having and is not worth
+    refusing a write for.
+    """
+    return (
+        await session.execute(
+            select(Identity.id).where(
+                Identity.org_id == org_id,
+                Identity.user_id == actor_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
 async def create_part(
     session: AsyncSession,
     *,
@@ -341,6 +371,13 @@ async def create_part(
             .values(ord=NotePart.ord + 1)
             .execution_options(synchronize_session=False)
         )
+    # Migration 0010. The actor was always in scope here and was never
+    # written down, which left a shared work note orderable but not
+    # attributable. ``created_by`` is an Identity (ADR-0028), not the
+    # ``users`` row ``actor_id`` names, so it goes through the same
+    # resolver the note links use; None when the actor has no identity
+    # in this workspace, which the column tolerates.
+    identity_id = await _actor_identity_id(session, org_id=org_id, actor_id=actor_id)
     part = NotePart(
         org_id=org_id,
         note_id=note_id,
@@ -348,6 +385,7 @@ async def create_part(
         title=title,
         body=body,
         lang=lang,
+        created_by=identity_id,
     )
     session.add(part)
     await session.flush()

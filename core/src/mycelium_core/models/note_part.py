@@ -77,6 +77,18 @@ class NotePart(UUIDPKMixin, OrgScopedMixin, TimestampMixin, VersionMixin, Base):
     # unspecified / mixed; the SPA can't yet route retrieval by lang
     # in v1, so a NULL is harmless.
     lang: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Who wrote this block (an Identity: a user or an ai_assistant,
+    # ADR-0028). Migration 0010. A task's work note is where several
+    # agents append while the work is still running, and the first
+    # question the next one asks is not what the note says but which
+    # blocks are somebody else's. NULL for every part written before
+    # the column existed, and for anything the writer chose not to
+    # attribute: inventing an author would be worse than a null.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("identities.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     # Provenance after merge_notes: the source note's id stays here
     # so an audit reader can trace where the body originated even
     # after the source note is soft-deleted.
