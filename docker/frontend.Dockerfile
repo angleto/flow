@@ -14,7 +14,19 @@ RUN corepack enable
 # upgrade (e.g. a TipTap patch) silently fails the install.
 COPY web/package.json web/pnpm-lock.yaml web/.npmrc ./
 RUN pnpm install --frozen-lockfile
-COPY web/ ./
+# Named inputs rather than the directory. `COPY web/ ./` copies whatever
+# a developer's tree holds beside the sources: a node_modules built for
+# the HOST, laid straight over the one just installed a line above (in CI
+# the checkout has none, so this fails only on the machine of whoever
+# runs the build by hand), an earlier dist/, and caches whose every
+# change invalidated this layer. A file the build needs and nobody named
+# fails it, which is the direction the mistake should go.
+COPY web/index.html web/vite.config.ts ./
+COPY web/tsconfig.json web/tsconfig.app.json web/tsconfig.node.json ./
+COPY web/src/ ./src/
+COPY web/public/ ./public/
+# Only the one the build runs; the other three scripts are gates.
+COPY web/scripts/assert-build-identity.mjs ./scripts/
 # Bundle identity. The backend takes these same three arguments in its
 # RUNTIME stage, because it reads them from the environment when it
 # answers /api/buildinfo. The SPA cannot: its identity is baked into the
