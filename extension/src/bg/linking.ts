@@ -29,7 +29,7 @@
 // worker is alive and an alarm is the net under it, because Chrome shuts
 // an idle worker down and will not schedule below half a minute.
 
-import { CONNECT_CODE_PARAM } from '@shared'
+import { CONNECT_CODE_PARAM, type components } from '@shared'
 import { callUnauthenticated } from './api'
 import { config } from './config'
 import { storage } from './storage'
@@ -46,22 +46,18 @@ const FAST_POLL_MS = 3_000
 export const LINK_ALARM = 'link-poll'
 export const LINK_ALARM_MINUTES = 0.5
 
-interface OpenedRequest {
-  device_code: string
-  user_code: string
-  verification_path: string
-  expires_at: string
-  interval: number
-}
-
-interface CollectedCredential {
-  secret: string
-  assistant_id: string
-  workspace_id: string
-  workspace_name: string
-  scope: string[]
-  expires_at: string | null
-}
+// The two answers, TAKEN FROM THE API'S OWN DESCRIPTION rather than
+// written out here.
+//
+// A hand-written copy of a response shape is a second statement of the
+// contract, and the two drift in the direction that is hardest to notice:
+// both sides keep compiling, and what breaks is a field this file reads
+// under a name the server stopped sending. ``schema.d.ts`` is generated
+// from the OpenAPI document and checked against it in CI, so consuming it
+// makes a rename upstream a compile error here instead of an empty value
+// at run time.
+type OpenedRequest = components['schemas']['DeviceAuthorizeOut']
+type CollectedCredential = components['schemas']['DeviceTokenOut']
 
 /** Open a request and send the person to answer it.
  *
