@@ -12,9 +12,6 @@ dist
 dist-ssr
 *.local
 
-# transient OpenAPI dump produced by `pnpm gen:api` (offline schema source)
-openapi.json
-
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

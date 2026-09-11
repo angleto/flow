@@ -21,8 +21,15 @@ test:
 # tsconfig.json is a references stub with "files": []), so the obvious
 # invocation reports success on a file it never opened. `tsc -b` is the
 # one that type-checks.
+#
+# `check:api-types` regenerates the SPA's API types from the API's OpenAPI
+# document and fails if the committed ones differ, so this target needs a
+# synced backend environment (`make sync`) as well as node. It runs first:
+# every step after it reads types that are only meaningful once they are
+# known to be the API's.
 web-check:
 	cd web && pnpm install --frozen-lockfile \
+	  && pnpm check:api-types \
 	  && pnpm exec eslint . \
 	  && pnpm check:shared \
 	  && pnpm check:i18n \

@@ -90,6 +90,31 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # src/shared/schema.d.ts is generated from the API's own OpenAPI
+      # document and committed, so it can drift, and it did: several
+      # schema-changing commits shipped before this step existed, leaving
+      # the SPA and the extension compiling against an API older than the
+      # one they call. Nothing else catches it -- the types stay
+      # internally consistent, so every type-check passes; they are simply
+      # a different API's.
+      #
+      # This is why uv appears in a job that is otherwise Node-only:
+      # generating them takes both toolchains, the dump being Python and
+      # the codegen Node. The alternative was to commit the intermediate
+      # openapi.json so each job could verify half the chain with what it
+      # already has -- rejected, because it adds a second generated
+      # artifact and 2 MB of churn per API change to buy review value
+      # schema.d.ts already gives. ``uv sync`` is explicit rather than
+      # left to ``uv run``: the workspace root is virtual, so an on-demand
+      # sync there installs no member and the dump cannot import the app.
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Backend environment (the OpenAPI dump imports the app)
+        working-directory: ${{ github.workspace }}
+        run: uv sync --all-packages
+      - name: API types are current (generated from the OpenAPI document)
+        run: pnpm check:api-types
       - name: Lint
         run: pnpm exec eslint . --no-cache
       # src/shared is compiled into the browser extension as well as the
