@@ -61,6 +61,18 @@ the extension.
 You never type a password into the extension, and the extension never reads
 the app's page.
 
+**If you are not logged in when you press Connect**, the settings page sends
+you to the login form first and returns you to the request afterwards, with
+its nonce intact. The request lives entirely in that URL, so a login detour
+that forgot where it came from did not postpone the connection, it destroyed
+it: you logged in, landed on your notes, and the extension was left waiting
+for an approval that could no longer be given. It looked exactly like an
+extension that needed a login of its own, which is the one thing this design
+exists to avoid. The nonce is valid for five minutes from the moment you
+press Connect, and that clock runs during the login, so a connection
+abandoned halfway is started again from the extension rather than from the
+browser's back button.
+
 **Any member may connect their own browser.** The panel can do a fixed,
 narrow subset of what its holder can already do, so the threshold for
 minting it is membership rather than ownership. A credential that asks for
@@ -256,5 +268,6 @@ hostname.
 | The typed panel↔worker seam | `extension/src/shared/protocol.ts` |
 | Rules shared with the SPA (error envelope, entity code, recents, query grammar, handshake) | `web/src/shared/` |
 | The settings page, the download and the connect flow | `web/src/routes/SettingsExtensionRoute.tsx` |
+| Carrying an interrupted request across the login form | `web/src/lib/returnTo.ts`, `web/src/components/RequireAuth.tsx` |
 | What a deployment publishes about its package | `extension/scripts/release.mjs`, read by `web/src/shared/extension.ts` |
 | The privacy statement the store listing points at | [`extension-privacy.md`](extension-privacy.md) |

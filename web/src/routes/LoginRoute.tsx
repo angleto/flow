@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api, errCode, errMessage, establishSession } from '../api/client'
+import { safeReturnTo } from '../lib/returnTo'
 
 // Login is email+password only (never a workspace choice, ADR-0024).
 // /auth/login answers 401 auth.mfa_required when MFA is active: we
@@ -10,6 +11,12 @@ import { api, errCode, errMessage, establishSession } from '../api/client'
 export function LoginRoute() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  // Where RequireAuth was standing when it sent this person here, or the
+  // default landing when they came to the form by themselves. Read once:
+  // it is fixed for the life of the form, and the MFA step must not lose
+  // it. See lib/returnTo.ts for why it travels in navigation state.
+  const location = useLocation()
+  const returnTo = safeReturnTo((location.state as { returnTo?: unknown } | null)?.returnTo)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [totp, setTotp] = useState('')
@@ -21,7 +28,7 @@ export function LoginRoute() {
 
   async function finish(token: string, refreshToken?: string) {
     await establishSession(token, refreshToken)
-    navigate('/', { replace: true })
+    navigate(returnTo, { replace: true })
   }
 
   async function onSubmit(e: FormEvent) {
