@@ -43,6 +43,7 @@ class MessageCode(enum.StrEnum):
     AUTH_DEVICE_PENDING = "auth.device_pending"
     AUTH_DEVICE_EXPIRED = "auth.device_expired"
     AUTH_DEVICE_DENIED = "auth.device_denied"
+    AUTH_DEVICE_TOO_MANY = "auth.device_too_many"
     RBAC_NO_MEMBERSHIP = "rbac.no_membership"
     RBAC_ROLE_INSUFFICIENT = "rbac.role_insufficient"
     MEMBER_NOT_FOUND = "member.not_found"
@@ -326,6 +327,10 @@ _CATALOG: dict[str, dict[MessageCode, str]] = {
         MessageCode.AUTH_DEVICE_PENDING: "Waiting for approval",
         MessageCode.AUTH_DEVICE_EXPIRED: "The request expired before it was approved",
         MessageCode.AUTH_DEVICE_DENIED: "The request was refused",
+        MessageCode.AUTH_DEVICE_TOO_MANY: (
+            "Too many connection requests are waiting from this address. "
+            "Answer one, or wait for them to expire."
+        ),
         MessageCode.RBAC_NO_MEMBERSHIP: "Not a member of this workspace",
         MessageCode.RBAC_ROLE_INSUFFICIENT: (
             "Role {current} is insufficient, requires >= {minimum}"

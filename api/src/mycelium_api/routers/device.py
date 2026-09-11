@@ -66,12 +66,17 @@ _CLIENTS: dict[str, tuple[str, str, tuple[str, ...]]] = {
 # the deployment it already talks to.
 VERIFICATION_PATH = "/settings/extension"
 
-# How many requests one network origin may open in the window. Generous
-# for a person who fumbles the ceremony twice, and far below what is
-# needed to farm short codes: the space is 30^8 and a code grants nothing
-# until somebody approves it, so this bounds table growth and noise more
-# than it bounds an attack.
-_OPEN_LIMIT = 12
+# How many UNANSWERED requests one network origin may have waiting in the
+# window. Answered ones do not count: completing a ceremony is not the
+# thing being bounded, and charging an origin for its successes would
+# punish the office, household or VPN exit where several people connect
+# on one address.
+#
+# The number is generous on purpose. A short code grants nothing until a
+# person approves it, so this bounds table growth and noise rather than an
+# attack, and the failure mode of setting it too low -- refusing somebody
+# a connection they are entitled to -- is worse than the one it prevents.
+_OPEN_LIMIT = 30
 _OPEN_WINDOW_SECONDS = 600
 
 

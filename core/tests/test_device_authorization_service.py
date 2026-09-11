@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import select
 
 from mycelium_core.db import admin_session, tenant_session
-from mycelium_core.errors import AuthError, NotFoundError
+from mycelium_core.errors import DomainError, NotFoundError
 from mycelium_core.i18n import MessageCode
 from mycelium_core.models.agent_token import AgentToken, WorkspaceBinding
 from mycelium_core.models.ai_assistant import AiAssistant
@@ -149,7 +149,7 @@ async def test_waiting_is_reported_as_pending_not_as_success() -> None:
     client reads it as "it worked" and stores an empty session."""
     async with admin_session() as s:
         opened = await svc.open_request(s, client="extension")
-    with pytest.raises(AuthError) as err:
+    with pytest.raises(DomainError) as err:
         await _redeem(opened.device_code)
     assert err.value.code is MessageCode.AUTH_DEVICE_PENDING
 
@@ -167,7 +167,7 @@ async def test_a_refusal_is_told_to_the_device_rather_than_timing_out() -> None:
         # Attributed: a refusal has an author too.
         assert row.answered_by_id == user
 
-    with pytest.raises(AuthError) as err:
+    with pytest.raises(DomainError) as err:
         await _redeem(opened.device_code)
     assert err.value.code is MessageCode.AUTH_DEVICE_DENIED
     assert await _assistant_count(org, user) == 0
@@ -176,7 +176,7 @@ async def test_a_refusal_is_told_to_the_device_rather_than_timing_out() -> None:
 async def test_an_unanswered_request_expires_and_says_so() -> None:
     async with admin_session() as s:
         opened = await svc.open_request(s, client="extension", ttl_seconds=-1)
-    with pytest.raises(AuthError) as err:
+    with pytest.raises(DomainError) as err:
         await _redeem(opened.device_code)
     assert err.value.code is MessageCode.AUTH_DEVICE_EXPIRED
 
@@ -248,7 +248,11 @@ async def test_a_finished_request_releases_its_short_code() -> None:
         await svc.approve(s, user_code=first.user_code, approver_id=user, org_id=org)
         # Re-issuing the same code is now legal at the database level.
         row = DeviceAuthorization(
-            device_code_hash="f" * 64,
+            # Unique per run. A fixed digest passes once and then collides
+            # with the row the previous run left behind: the test database
+            # is not emptied between runs, so a constant here is a test
+            # that only works on a virgin database.
+            device_code_hash=uuid.uuid4().hex * 2,
             user_code=first.user_code,
             client="extension",
             expires_at=datetime.datetime.now(tz=datetime.UTC) + datetime.timedelta(minutes=10),

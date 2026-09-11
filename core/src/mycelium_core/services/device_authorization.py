@@ -57,7 +57,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mycelium_core import security_events
 from mycelium_core.db import as_tenant
-from mycelium_core.errors import AuthError, NotFoundError, QuotaExceededError
+from mycelium_core.errors import DomainError, NotFoundError, QuotaExceededError
 from mycelium_core.i18n import MessageCode
 from mycelium_core.models.agent_token import WorkspaceBinding
 from mycelium_core.models.device_authorization import DeviceAuthorization
@@ -231,14 +231,27 @@ async def check_open_rate(
     limit: int,
     window_seconds: int,
 ) -> None:
-    """Refuse an origin that is opening requests faster than a person
-    could answer them.
+    """Refuse an origin that is piling up requests nobody answers.
+
+    UNANSWERED ones, and that is the rule rather than a detail of it. A
+    first attempt counted every request an origin had opened in the
+    window, which made a COMPLETED ceremony consume budget for ten
+    minutes afterwards -- so the thing being punished was using the
+    feature, and the first casualty was a test suite that connects
+    several times in a row. Someone who opens a request and gets it
+    approved has abused nothing; someone who opens requests nobody ever
+    answers is exactly what this exists to bound, and now that is what it
+    counts.
+
+    It also matters for shared addresses, which is the common case rather
+    than the exotic one: an office, a household and a VPN exit are one
+    network origin, and a counter that charged them for their successes
+    would lock out the person who happened to connect last.
 
     Counted from the rows themselves rather than from a separate counter
     table: opening a request IS the thing being limited, each one is
     already recorded here with its origin and its moment, and a second
-    store would be a second thing to keep true. The sweep keeps the
-    window cheap to count.
+    store would be a second thing to keep true.
 
     An origin the server could not resolve is NOT limited, and that is a
     deliberate hole with a name: behind a proxy chain with no configured
@@ -256,6 +269,9 @@ async def check_open_rate(
             .where(
                 DeviceAuthorization.origin_ip == origin_ip,
                 DeviceAuthorization.created_at >= since,
+                DeviceAuthorization.approved_at.is_(None),
+                DeviceAuthorization.denied_at.is_(None),
+                DeviceAuthorization.redeemed_at.is_(None),
             )
         )
     ).scalar_one()
@@ -265,7 +281,10 @@ async def check_open_rate(
             origin_ip=origin_ip,
             limit=limit,
         )
-        raise QuotaExceededError(MessageCode.RATE_LIMITED)
+        # Its own message, because the shared one names an API key and
+        # there is no key in this flow: a person reading it would be
+        # sent looking for something that does not exist.
+        raise QuotaExceededError(MessageCode.AUTH_DEVICE_TOO_MANY)
 
 
 async def approve(
@@ -328,8 +347,16 @@ async def redeem(
 ) -> RedeemedCredential:
     """Collect. This is where the credential comes into existence.
 
-    Raises, and the distinction matters to the caller because the device
-    reacts differently to each:
+    Raises ``DomainError`` (400) for the three answers below, never
+    ``AuthError`` (401), and the difference is the contract rather than a
+    detail. None of them is an authentication failure: the caller holds
+    exactly the right code, and what it is being told is the STATE of the
+    request. A 401 would also invite every intermediary and client library
+    that special-cases it to do something unhelpful with a poll loop, and
+    the standard grant uses 400 for the same three reasons.
+
+    The distinctions matter to the caller because the device reacts
+    differently to each:
 
     - ``AUTH_DEVICE_PENDING``: nobody has answered yet. The ordinary
       answer for most of a request's life, and NOT a failure. The HTTP
@@ -351,14 +378,14 @@ async def redeem(
     if row is None or row.redeemed_at is not None:
         raise NotFoundError(MessageCode.AUTH_DEVICE_CODE_INVALID)
     if row.denied_at is not None:
-        raise AuthError(MessageCode.AUTH_DEVICE_DENIED)
+        raise DomainError(MessageCode.AUTH_DEVICE_DENIED)
     if row.approved_at is None:
         # Expiry is checked AFTER the answer: a request approved a second
         # before it lapsed has been answered, and the person who answered
         # it should not have their decision thrown away by the clock.
         if row.expires_at <= _now():
-            raise AuthError(MessageCode.AUTH_DEVICE_EXPIRED)
-        raise AuthError(MessageCode.AUTH_DEVICE_PENDING)
+            raise DomainError(MessageCode.AUTH_DEVICE_EXPIRED)
+        raise DomainError(MessageCode.AUTH_DEVICE_PENDING)
     if row.answered_by_id is None or row.approved_org_id is None:
         # Approved with no approver recorded is not a state this module
         # can produce. If it is ever read, something else wrote this row.
