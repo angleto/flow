@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/readyz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Readyz */
+        get: operations["readyz_readyz_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/signup": {
         parameters: {
             query?: never;
@@ -2641,6 +2658,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agent/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Workspaces
+         * @description Where this credential may act.
+         *
+         *     Pre-tenant, and it must be: a credential that reaches several
+         *     workspaces cannot put one in ``X-Workspace-Id`` before it knows
+         *     which ones exist for it. Deliberately NOT ``GET /workspaces``, which
+         *     stays HUMAN_ONLY and answers a question about the ACCOUNT (every
+         *     workspace, its status, the switcher's data). This answers the
+         *     narrower one -- what may this credential act on -- and for a
+         *     confined credential the answer is one row, not a list of places it
+         *     cannot go.
+         *
+         *     The role on each row is the caller's membership there, which is the
+         *     ceiling this credential is clamped to in that workspace. It is not a
+         *     promise that every operation will succeed: the scope list still
+         *     applies, and both are re-read per request.
+         */
+        get: operations["get_agent_workspaces_agent_workspaces_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agent/self": {
         parameters: {
             query?: never;
@@ -3833,10 +3884,16 @@ export interface paths {
         /**
          * Migration Status
          * @description Embedding backfill coverage for this workspace (task 5276207e):
-         *     {total, migrated, pending, hosted}. ``total`` is blobs with non-NULL
-         *     text; ``migrated`` is blobs with the always-on LOCAL vector; ``hosted``
-         *     is blobs with the optional hosted vector; ``pending`` is the local
-         *     backfill's TODO.
+         *     {total, migrated, pending, hosted, stale}. ``total`` is blobs with
+         *     non-NULL text; ``migrated`` is blobs with the always-on LOCAL vector;
+         *     ``hosted`` is blobs with the optional hosted vector; ``pending`` is the
+         *     local backfill's TODO.
+         *
+         *     ``stale`` is blobs that HAVE a local vector written by a model that is
+         *     no longer the active one. They are counted in ``migrated`` too, because
+         *     they are embedded; the number answers a different question, which is
+         *     whether the dense branch is ignoring part of a corpus that reports
+         *     itself fully migrated. It falls to zero as the sweep converges.
          */
         get: operations["migration_status__memory_migration_status_get"];
         put?: never;
@@ -7686,6 +7743,8 @@ export interface components {
             notes?: string | null;
             /** @default external */
             runtime?: components["schemas"]["AssistantRuntime"];
+            /** @default workspace */
+            workspace_binding?: components["schemas"]["WorkspaceBinding"];
         };
         /**
          * AiAssistantCreatedOut
@@ -7736,6 +7795,8 @@ export interface components {
             updated_at: string;
             /** Token Prefix */
             token_prefix?: string | null;
+            /** @default workspace */
+            workspace_binding?: components["schemas"]["WorkspaceBinding"];
         };
         /** AiAssistantPatchIn */
         AiAssistantPatchIn: {
@@ -13463,6 +13524,11 @@ export interface components {
             token: components["schemas"]["SelfTokenOut"];
             /** Scope */
             scope?: string[] | null;
+            /**
+             * Workspace Binding
+             * @default workspace
+             */
+            workspace_binding?: string;
         };
         /** SelfTokenOut */
         SelfTokenOut: {
@@ -13484,6 +13550,23 @@ export interface components {
             name: string;
             /** Role */
             role: string;
+        };
+        /**
+         * SelfWorkspacesOut
+         * @description The workspaces this credential may act in.
+         *
+         *     ``binding`` says which rule produced the list, because the two are
+         *     different promises and a client that cannot tell them apart would
+         *     cache the wrong one: ``workspace`` is a credential confined to the
+         *     one it was minted for, ``account`` follows its holder into every
+         *     workspace they belong to -- including one they join tomorrow, which
+         *     is why this is asked rather than remembered.
+         */
+        SelfWorkspacesOut: {
+            /** Binding */
+            binding: string;
+            /** Workspaces */
+            workspaces: components["schemas"]["SelfWorkspaceOut"][];
         };
         /** SentOut */
         SentOut: {
@@ -14864,6 +14947,26 @@ export interface components {
             /** Description */
             description?: string | null;
         };
+        /**
+         * WorkspaceBinding
+         * @description Which workspaces a credential may act in.
+         *
+         *     ``workspace``: the one it was minted for, and no other. The default,
+         *     and what every credential minted before this column existed is: the
+         *     CLI stores a workspace beside each token and refuses to switch, and
+         *     the server enforces the same in ``_confine_agent_token``.
+         *
+         *     ``account``: every workspace its holder belongs to, decided per
+         *     request from the workspace the request names. It is NOT a wider
+         *     grant. The holder's own membership in that workspace still
+         *     authorizes each operation, so the credential is a delegation of what
+         *     the person can already do there and follows them into a workspace
+         *     they join and out of one they leave. What it does widen is the blast
+         *     radius of the secret itself, and that is written down where the
+         *     reader approves it and in ``docs/extension.md``.
+         * @enum {string}
+         */
+        WorkspaceBinding: "workspace" | "account";
         /** WorkspaceCreateIn */
         WorkspaceCreateIn: {
             /** Name */
@@ -15001,6 +15104,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    readyz_readyz_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -20890,6 +21013,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_workspaces_agent_workspaces_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SelfWorkspacesOut"];
                 };
             };
         };
