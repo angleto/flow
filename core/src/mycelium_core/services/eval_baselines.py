@@ -400,19 +400,35 @@ def _rr(rank: int | None) -> float:
     return 1.0 / rank if rank else 0.0
 
 
-def paired_table(runs: Sequence[SystemRun], *, seed: int = 42, n_resamples: int = 2000) -> str:
-    """Mycelium-vs-each-system paired comparison: delta recall@k with exact
+def paired_table(
+    runs: Sequence[SystemRun],
+    *,
+    base_system: str = SYSTEM_MYCELIUM,
+    seed: int = 42,
+    n_resamples: int = 2000,
+) -> str:
+    """Base-vs-each-system paired comparison: delta recall@k with exact
     McNemar p on the discordant pairs, delta MRR with a cluster-bootstrap CI
-    (clusters = fact_id). Scored queries only (impossible excluded)."""
+    (clusters = fact_id). Scored queries only (impossible excluded).
+
+    ``base_system`` names the run every other run is compared against. It
+    defaults to the T6 baseline matrix's own base, and is a parameter so a
+    different paired round (the embedder round compares candidates against
+    the incumbent embedder, not against ``mycelium``) reuses this statistic
+    instead of growing a second copy of it."""
     by_system: dict[str, dict[str, dict[str, Any]]] = {
         run.system: {rec["qid"]: rec for rec in run.records if not rec["impossible"]}
         for run in runs
     }
-    base = by_system.get(SYSTEM_MYCELIUM)
+    base = by_system.get(base_system)
     if not base:
-        raise ValueError("paired_table: mycelium run missing")
+        raise ValueError(f"paired_table: base run {base_system!r} missing")
+    # Column width from the data: the T6 systems are short names, but a
+    # paired round over embedders labels its runs with HuggingFace ids,
+    # which are long enough to shift every column of a fixed-width table.
+    w = max(20, *(len(r.system) + (8 if r.proxy else 0) for r in runs)) + 2
     lines = [
-        f"{'system':<20}{'n':>5}  {'recall':>7} {'Δrecall':>8} {'McNemar p':>10}  "
+        f"{'system':<{w}}{'n':>5}  {'recall':>7} {'Δrecall':>8} {'McNemar p':>10}  "
         f"{'MRR':>6} {'ΔMRR':>7} {'Δ95%CI':>17}",
     ]
     for run in runs:
@@ -437,7 +453,7 @@ def paired_table(runs: Sequence[SystemRun], *, seed: int = 42, n_resamples: int 
         d_mrr = sum(v for _, v in clustered) / n
         label = run.system + (" (proxy)" if run.proxy else "")
         lines.append(
-            f"{label:<20}{n:>5}  {recall:>7.3f} {recall - base_recall:>+8.3f} "
+            f"{label:<{w}}{n:>5}  {recall:>7.3f} {recall - base_recall:>+8.3f} "
             f"{p:>10.4f}  {mrr:>6.3f} {d_mrr:>+7.3f} [{lo:>+.3f},{hi:>+.3f}]"
         )
     return "\n".join(lines)

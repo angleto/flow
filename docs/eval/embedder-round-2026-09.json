@@ -1,0 +1,25 @@
+{
+  "notes": "Pre-registrato 2026-09-11, prima di qualsiasi run (task 234f8912 / nota 11024ecf). Domanda: bge-m3 resta l'embedder del tier locale? Il round del 2026-07-03 (nota 3276b266 §4) non poteva rispondere, perche' LocalEmbedder non applicava il fleet dim e quindi solo i checkpoint a 1024 nativi erano scrivibili: la fascia 4-8B, dove l'articolo COLM 2026 mette tutto il guadagno su retrieval (+6.0 Qwen3-E-4B, +11.7 Octen-8B su MTEB(LLM)), non era misurabile. Variabile isolata: la SCALA dentro una sola famiglia (Qwen3-Embedding), stessa convenzione di prompt, tutti MRL, cosi' il troncamento al fleet dim e' principiato e confrontabile. Il punto 0.6B e' il controllo doppio: stessa taglia di bge-m3 E stesso modello che a luglio perse (0.713 vs 0.726) misurato pero' SENZA il suo prefisso di istruzione; se ora vince, il finding e' sul metodo di luglio prima che sul modello. Prefissi presi dal config_sentence_transformers.json dei checkpoint, non dai model card. Regola di promozione, invariata da luglio e non rafforzabile dopo aver visto i numeri: promuovere solo con miglioramento netto su recall@k E MRR; il paired table (McNemar + CI bootstrap) e' riportato accanto per vedere se il delta si distingue dal rumore. ESCLUSI e perche': EmbeddingGemma-300M emette 768 dim, sotto il fleet dim 1024, e un vettore corto non e' paddabile (fallisce al primo write, per costruzione); Jina-v5-Nano/S hanno dim e licenza d'uso commerciale non verificate; Octen-8B non ha riferimento nell'articolo e non e' stato trovato pubblico; multilingual-e5-large-instruct e' escluso perche' due misure indipendenti (luglio 0.696 e MTEB(LLM) 44.8 vs 44.3) lo mettono gia' in banda con bge-m3, quindi porta poca informazione, e il suo prefisso non e' dichiarato nel config del checkpoint. Limite dichiarato: LoCoMo e LongMemEval sono memoria conversazionale in inglese, il workload nativo di mycelium e' italiano+inglese misto con nomi propri e codici entita'. Questo round decide il tier locale, non l'italiano.",
+  "baseline": "bge-m3",
+  "candidates": [
+    {
+      "label": "bge-m3",
+      "model": "BAAI/bge-m3"
+    },
+    {
+      "label": "qwen3-emb-0.6B",
+      "model": "Qwen/Qwen3-Embedding-0.6B",
+      "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:"
+    },
+    {
+      "label": "qwen3-emb-4B",
+      "model": "Qwen/Qwen3-Embedding-4B",
+      "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:"
+    },
+    {
+      "label": "qwen3-emb-8B",
+      "model": "Qwen/Qwen3-Embedding-8B",
+      "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:"
+    }
+  ]
+}

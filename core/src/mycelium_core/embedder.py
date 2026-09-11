@@ -93,7 +93,22 @@ class LocalEmbedder:
     imported so the heavy dependency is optional and never loaded in
     CI (tests inject a fake). The model is loaded once per instance and
     the instance itself is cached at module scope by ``get_embedder``;
-    both the load and the encode are dispatched to a worker thread."""
+    both the load and the encode are dispatched to a worker thread.
+
+    Emits exactly the fleet ``embed_dim`` via ``_truncate_normalize``,
+    the same coercion :class:`HostedEmbedder` applies. The invariant
+    ("every embedder, local or hosted, MUST emit this dim" --
+    ``config.embed_dim``) was enforced on the hosted side only, so the
+    local tier could host exactly one model: the default bge-m3, whose
+    1024 native dim happens to equal the fleet dim. Any other checkpoint
+    failed at the first write with ``memory.dim_mismatch``, which is why
+    the 2026-07-03 embedder round could only compare 1024d models.
+    Truncation is the documented Matryoshka procedure and is meaningful
+    only for MRL-trained checkpoints; a non-MRL model truncated here
+    loses quality silently, so a candidate's MRL support belongs in the
+    evidence for adopting it. A model emitting FEWER dims than the fleet
+    cannot be padded faithfully and still fails at the write, by
+    design."""
 
     def __init__(self, model_name: str = "BAAI/bge-m3") -> None:
         self._model_name = model_name
@@ -140,6 +155,23 @@ class LocalEmbedder:
         call multiple times; subsequent calls are no-ops."""
         await self._model_ready()
 
+    @property
+    def native_dim(self) -> int | None:
+        """Dimension the loaded model actually emits, BEFORE the fleet-dim
+        coercion in ``embed``; ``None`` until the model is loaded.
+
+        Exposed because that coercion is otherwise invisible: a checkpoint
+        running 4096 -> 1024 and one running natively at 1024 produce
+        output of the same shape, and only the first has paid the
+        Matryoshka truncation. A comparison between embedders that does not
+        report this is not interpretable."""
+        model = self._model
+        if model is None:
+            return None
+        getter = getattr(model, "get_sentence_embedding_dimension", None)
+        dim = getter() if callable(getter) else None
+        return int(dim) if isinstance(dim, int) else None
+
     async def embed(self, text: str) -> EmbedResult:  # pragma: no cover - network/model
         model = await self._model_ready()
 
@@ -148,7 +180,7 @@ class LocalEmbedder:
 
         vec = await asyncio.to_thread(_run)
         return EmbedResult(
-            vector=[float(x) for x in vec],
+            vector=_truncate_normalize(vec, get_settings().embed_dim),
             model_id=self._model_name,
             tokens=max(1, len(text.split())),
         )
@@ -189,9 +221,10 @@ class LocalEmbedder:
             return rows
 
         vecs = await asyncio.to_thread(_run)
+        target = settings.embed_dim
         return [
             EmbedResult(
-                vector=[float(x) for x in v],
+                vector=_truncate_normalize(v, target),
                 model_id=self._model_name,
                 tokens=max(1, len(t.split())),
             )
