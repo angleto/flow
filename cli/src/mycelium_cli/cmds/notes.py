@@ -962,7 +962,11 @@ def unlink(
         child_id = _resolve_note(c, child)
         resp = c.delete(
             f"/notes/{parent_id}/links",
-            params={"child_note_id": child_id, "kind": kind},
+            params={
+                "parent_note_id": parent_id,
+                "child_note_id": child_id,
+                "kind": kind,
+            },
         )
         if resp.status_code not in (200, 204):
             get_json(resp)

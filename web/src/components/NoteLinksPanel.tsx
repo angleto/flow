@@ -2,48 +2,33 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api, authFetch, errMessage, workspaceHeader } from '../api/client'
-import type { components } from '../shared'
+import type { components, NoteLinkKind } from '../shared'
+import {
+  groupNoteLinks,
+  isUndirectedNoteLinkKind,
+  linkedNeighbourIds,
+  otherEndpoint,
+} from '../shared'
 import { NotePickList } from './NotePickList'
 
 type NoteLinkOut = components['schemas']['NoteLinkOut']
 type Note = components['schemas']['NoteListOut']
 
-// Mycelial 4-verb link model (ADR-0040). ``related`` is undirected;
-// the other three are directional (parent=origin/superseder/refuter,
-// child=derived/superseded/refuted).
-type Kind = 'hypha_of' | 'related' | 'supersedes' | 'contradicts'
-
-const KINDS: readonly Kind[] = [
-  'hypha_of',
-  'related',
-  'supersedes',
-  'contradicts',
-] as const
-
-const DIRECTIONAL: Record<Kind, boolean> = {
-  hypha_of: true,
-  related: false,
-  supersedes: true,
-  contradicts: true,
-}
-
-// Lato nota: pannello "Linked ideas" che pilota i quattro verbi
-// note-to-note di ADR-0040. Mirror strutturale di LinkedTasksPanel
-// (sezioni per-kind, toggle ``adding``, NotePickList in
-// ``linkedpanel__picker``, authFetch POST/DELETE, raggruppamento
-// byKind, canAdd/canRemove). Differenza chiave: la direzionalità.
-// Per i kind direzionali distinguiamo outgoing (questa nota = parent,
-// ``asParent``) e incoming (questa nota = child, ``asChild``); in
-// aggiunta si parte da questa-nota-come-parent con uno swap. Per
-// ``related`` (non orientato) si lista e basta: il picker crea il link
-// con questa nota come parent_note_id e il server canonicalizza gli
-// estremi.
+// Note side: the "Linked ideas" panel driving the four note-to-note
+// verbs of ADR-0040. Structural mirror of LinkedTasksPanel (per-kind
+// sections, ``adding`` toggle, NotePickList inside
+// ``linkedpanel__picker``, authFetch POST/DELETE, per-kind grouping,
+// canAdd/canRemove). The difference that matters is directionality, and
+// it is not decided here: ``groupNoteLinks`` owns it, because the store
+// canonicalises an undirected edge to parent < child and a panel that
+// listed only the parent side showed such an edge on one of its two
+// notes and not on the other.
 export function NoteLinksPanel({ noteId }: { noteId: string }) {
   const { t } = useTranslation()
   const [outgoing, setOutgoing] = useState<NoteLinkOut[]>([])
   const [incoming, setIncoming] = useState<NoteLinkOut[]>([])
   const [notes, setNotes] = useState<Note[]>([])
-  const [adding, setAdding] = useState<Kind | null>(null)
+  const [adding, setAdding] = useState<NoteLinkKind | null>(null)
   // When adding a directional link, false = this-note-as-parent
   // (default), true = this-note-as-child (swapped).
   const [addAsChild, setAddAsChild] = useState(false)
@@ -98,42 +83,16 @@ export function NoteLinksPanel({ noteId }: { noteId: string }) {
     [notes, t],
   )
 
-  // Outgoing links group by kind on parent==this side; incoming on the
-  // child==this side. ``related`` is merged below.
-  const outByKind = useMemo(() => {
-    const m: Record<Kind, NoteLinkOut[]> = {
-      hypha_of: [],
-      related: [],
-      supersedes: [],
-      contradicts: [],
-    }
-    for (const link of outgoing) {
-      const k = link.kind as Kind
-      if (m[k]) m[k].push(link)
-    }
-    return m
-  }, [outgoing])
+  // The two stored orientations, read from this note: directional kinds
+  // keep parent and child apart, the undirected ones collapse into one
+  // neighbour list whichever way the row happens to be stored.
+  const groups = useMemo(
+    () => groupNoteLinks(outgoing, incoming),
+    [outgoing, incoming],
+  )
 
-  const inByKind = useMemo(() => {
-    const m: Record<Kind, NoteLinkOut[]> = {
-      hypha_of: [],
-      related: [],
-      supersedes: [],
-      contradicts: [],
-    }
-    for (const link of incoming) {
-      const k = link.kind as Kind
-      if (m[k]) m[k].push(link)
-    }
-    return m
-  }, [incoming])
-
-  // The other endpoint of a link, relative to this note.
   const otherId = useCallback(
-    (link: NoteLinkOut) =>
-      link.parent_note_id === noteId
-        ? link.child_note_id
-        : link.parent_note_id,
+    (link: NoteLinkOut) => otherEndpoint(link, noteId),
     [noteId],
   )
 
@@ -143,24 +102,12 @@ export function NoteLinksPanel({ noteId }: { noteId: string }) {
   // refuses.
   const isSystem = (link: NoteLinkOut) => !link.created_by
 
-  // Ids already linked to this note for a given kind (either
-  // direction), so the picker can exclude them.
-  const linkedIdsFor = useCallback(
-    (kind: Kind) => {
-      const set = new Set<string>()
-      for (const l of outByKind[kind]) set.add(otherId(l))
-      for (const l of inByKind[kind]) set.add(otherId(l))
-      return set
-    },
-    [outByKind, inByKind, otherId],
-  )
-
-  async function addLink(kind: Kind, targetId: string) {
+  async function addLink(kind: NoteLinkKind, targetId: string) {
     setErr(null)
-    // related is undirected: this note is always parent_note_id, the
-    // server canonicalises parent<child. Directional kinds honour the
-    // swap toggle.
-    const swap = DIRECTIONAL[kind] && addAsChild
+    // Directional kinds honour the swap toggle; for the undirected ones
+    // the order is immaterial (the server canonicalises the endpoints),
+    // and the route accepts this note at either end.
+    const swap = !isUndirectedNoteLinkKind(kind) && addAsChild
     const body = {
       parent_note_id: swap ? targetId : noteId,
       child_note_id: swap ? noteId : targetId,
@@ -184,13 +131,13 @@ export function NoteLinksPanel({ noteId }: { noteId: string }) {
     await reload()
   }
 
-  async function removeLink(kind: Kind, link: NoteLinkOut) {
+  async function removeLink(kind: NoteLinkKind, link: NoteLinkOut) {
     setErr(null)
-    // DELETE matches by (note_id in path, child_note_id, kind). The
-    // child is the non-this endpoint for outgoing links and this note
-    // for incoming ones; canonicalised ``related`` rows are matched by
-    // whichever endpoint the server stored as child.
+    // Both endpoints as stored, so the edge is named the same way from
+    // either of its notes: this note is the anchor in the path, not
+    // necessarily the parent.
     const qs = new URLSearchParams({
+      parent_note_id: link.parent_note_id,
       child_note_id: link.child_note_id,
       kind,
     })
@@ -208,7 +155,7 @@ export function NoteLinksPanel({ noteId }: { noteId: string }) {
     await reload()
   }
 
-  function renderItems(kind: Kind, links: NoteLinkOut[]) {
+  function renderItems(kind: NoteLinkKind, links: NoteLinkOut[]) {
     if (links.length === 0) {
       return <p className="hint linkedpanel__empty">{t('noteLinks.empty')}</p>
     }
@@ -251,13 +198,11 @@ export function NoteLinksPanel({ noteId }: { noteId: string }) {
         <span className="muted">{t('noteLinks.headHint')}</span>
       </div>
       {err && <p className="error">{err}</p>}
-      {KINDS.map((kind) => {
+      {groups.map((group) => {
+        const kind = group.kind
         const isAdding = adding === kind
-        const directional = DIRECTIONAL[kind]
-        const out = outByKind[kind]
-        const inc = inByKind[kind]
-        const total = directional ? out.length + inc.length : out.length
-        const excluded = linkedIdsFor(kind)
+        const directional = group.directional
+        const excluded = linkedNeighbourIds(group, noteId)
         return (
           <section key={kind} className="linkedpanel__section">
             <header className="linkedpanel__sectionhead">
@@ -273,7 +218,7 @@ export function NoteLinksPanel({ noteId }: { noteId: string }) {
               >
                 (i)
               </span>
-              <span className="muted">({total})</span>
+              <span className="muted">({group.total})</span>
               <button
                 type="button"
                 className="btn--ghost btn--sm"
@@ -286,19 +231,19 @@ export function NoteLinksPanel({ noteId }: { noteId: string }) {
                 {isAdding ? t('common.cancel') : '+'}
               </button>
             </header>
-            {directional ? (
+            {group.directional ? (
               <>
                 <div className="linkedpanel__direction">
                   <span className="muted">{t('noteLinks.asParent')}</span>
-                  {renderItems(kind, out)}
+                  {renderItems(kind, group.asParent)}
                 </div>
                 <div className="linkedpanel__direction">
                   <span className="muted">{t('noteLinks.asChild')}</span>
-                  {renderItems(kind, inc)}
+                  {renderItems(kind, group.asChild)}
                 </div>
               </>
             ) : (
-              renderItems(kind, out)
+              renderItems(kind, group.neighbours)
             )}
             {isAdding && (
               <div className="linkedpanel__picker">

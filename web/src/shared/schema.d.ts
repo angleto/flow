@@ -5151,7 +5151,16 @@ export interface paths {
         put?: never;
         /** Link Notes */
         post: operations["link_notes_notes__note_id__links_post"];
-        /** Unlink Notes */
+        /**
+         * Unlink Notes
+         * @description Remove one typed note↔note edge. Both endpoints travel
+         *     explicitly, mirroring the POST body, and ``note_id`` is the note the
+         *     caller has open rather than the parent. Taking the parent from the
+         *     path could not name an edge stored with the anchor as child, which is
+         *     half of every undirected ``related`` edge (the service canonicalises
+         *     them to parent < child): those were listed by GET and then refused
+         *     here, which is the one asymmetry the link surface must not have.
+         */
         delete: operations["unlink_notes_notes__note_id__links_delete"];
         options?: never;
         head?: never;
@@ -26736,6 +26745,7 @@ export interface operations {
     unlink_notes_notes__note_id__links_delete: {
         parameters: {
             query: {
+                parent_note_id: string;
                 child_note_id: string;
                 kind: string;
             };

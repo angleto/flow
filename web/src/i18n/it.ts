@@ -1325,6 +1325,7 @@ export const it: Catalog = {
     loading: 'Caricamento…',
     outgoing: 'Collegamenti uscenti',
     incoming: 'Collegamenti entranti (backlink)',
+    undirected: 'Collegate (senza direzione)',
     fruits: 'Task (frutti)',
     none: 'Nessuno.',
     unlink: 'Scollega',

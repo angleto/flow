@@ -21,9 +21,11 @@ import { GardenMindmap } from '../components/GardenMindmap'
 import { useFocus } from '../lib/focus'
 import { getSession } from '../auth/session'
 import type { components } from '../shared'
+import { groupNoteLinks, otherEndpoint } from '../shared'
 
 type Note = components['schemas']['NoteListOut']
 type NoteWithLinks = components['schemas']['NoteWithLinksOut']
+type NoteLink = components['schemas']['NoteLinkOut']
 type TaskBrief = { id: string; title: string }
 
 type Tab = 'inbox' | 'garden' | 'cemetery' | 'mindmap'
@@ -556,12 +558,16 @@ export function GardenRoute() {
                   data={openData}
                   allNotes={notes}
                   allTasks={allTasks}
-                  onUnlink={async (childId, kind) => {
+                  onUnlink={async (link) => {
                     await api.DELETE('/notes/{note_id}/links', {
                       params: {
                         header: workspaceHeader(),
                         path: { note_id: openId },
-                        query: { child_note_id: childId, kind },
+                        query: {
+                          parent_note_id: link.parent_note_id,
+                          child_note_id: link.child_note_id,
+                          kind: link.kind,
+                        },
                       },
                     })
                     await openPlant(openId)
@@ -585,7 +591,7 @@ function PlantDetail({
   data: NoteWithLinks
   allNotes: Note[]
   allTasks: TaskBrief[]
-  onUnlink: (childNoteId: string, kind: string) => Promise<void>
+  onUnlink: (link: NoteLink) => Promise<void>
 }) {
   const { t } = useTranslation()
   const titleById = (id: string) =>
@@ -596,9 +602,46 @@ function PlantDetail({
   // The schema marks default-valued arrays as optional (post fix to
   // gen:api --default-non-nullable false), so guard them with empty
   // fallbacks once at the top of the render.
-  const outgoing = data.outgoing ?? []
-  const incoming = data.incoming ?? []
   const taskLinks = data.task_links ?? []
+  // The stored (parent, child) order is a direction only for the
+  // directional kinds; for the undirected ones it is a canonicalisation
+  // by id, so those edges get their own section instead of being filed
+  // under a direction that would be this note's id sorting low or high.
+  const groups = groupNoteLinks(data.outgoing ?? [], data.incoming ?? [])
+  const asParent = groups.flatMap((g) => (g.directional ? g.asParent : []))
+  const asChild = groups.flatMap((g) => (g.directional ? g.asChild : []))
+  const undirected = groups.flatMap((g) => (g.directional ? [] : g.neighbours))
+  const linkRow = (l: NoteLink) => {
+    const other = otherEndpoint(l, n.id)
+    return (
+      <li key={l.id}>
+        <span
+          className="chip chip--linkkind"
+          title={t(`garden.mindmap.linkKindHint.${l.kind}`)}
+        >
+          {t(`garden.mindmap.linkKind.${l.kind}`)}
+        </span>{' '}
+        <Link to={`/notes/${other}`}>{titleById(other)}</Link>{' '}
+        <button
+          type="button"
+          className="btn--ghost btn--sm"
+          onClick={() => void onUnlink(l)}
+        >
+          {t('garden.unlink')}
+        </button>
+      </li>
+    )
+  }
+  const linkSection = (heading: string, links: NoteLink[]) => (
+    <section className="plant-detail__section">
+      <h3>{heading}</h3>
+      {links.length === 0 ? (
+        <p className="hint">{t('garden.none')}</p>
+      ) : (
+        <ul className="plant-detail__links">{links.map(linkRow)}</ul>
+      )}
+    </section>
+  )
   return (
     <div className="plant-detail">
       <div className="plant-detail__chips">
@@ -615,57 +658,9 @@ function PlantDetail({
           <MarkdownView text={n.transcript} parent={{ kind: 'note', id: n.id }} />
         </div>
       )}
-      <section className="plant-detail__section">
-        <h3>{t('garden.outgoing')}</h3>
-        {outgoing.length === 0 ? (
-          <p className="hint">{t('garden.none')}</p>
-        ) : (
-          <ul className="plant-detail__links">
-            {outgoing.map((l) => (
-              <li key={l.id}>
-                <span
-                  className="chip chip--linkkind"
-                  title={t(`garden.mindmap.linkKindHint.${l.kind}`)}
-                >
-                  {t(`garden.mindmap.linkKind.${l.kind}`)}
-                </span>{' '}
-                <Link to={`/notes/${l.child_note_id}`}>
-                  {titleById(l.child_note_id)}
-                </Link>{' '}
-                <button
-                  type="button"
-                  className="btn--ghost btn--sm"
-                  onClick={() => void onUnlink(l.child_note_id, l.kind)}
-                >
-                  {t('garden.unlink')}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-      <section className="plant-detail__section">
-        <h3>{t('garden.incoming')}</h3>
-        {incoming.length === 0 ? (
-          <p className="hint">{t('garden.none')}</p>
-        ) : (
-          <ul className="plant-detail__links">
-            {incoming.map((l) => (
-              <li key={l.id}>
-                <span
-                  className="chip chip--linkkind"
-                  title={t(`garden.mindmap.linkKindHint.${l.kind}`)}
-                >
-                  {t(`garden.mindmap.linkKind.${l.kind}`)}
-                </span>{' '}
-                <Link to={`/notes/${l.parent_note_id}`}>
-                  {titleById(l.parent_note_id)}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {linkSection(t('garden.outgoing'), asParent)}
+      {linkSection(t('garden.incoming'), asChild)}
+      {linkSection(t('garden.undirected'), undirected)}
       <section className="plant-detail__section">
         <h3>{t('garden.fruits')}</h3>
         {taskLinks.length === 0 ? (

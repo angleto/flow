@@ -1764,10 +1764,14 @@ async def link_notes(
     body: NoteLinkIn,
     ctx: Annotated[TenantCtx, Depends(tenant_ctx, scope="function")],
 ) -> NoteLinkOut:
-    # ``note_id`` from the URL is the parent (the link's "from"); the
-    # body carries the child and the kind. We accept the parent in
-    # both places defensively.
-    if body.parent_note_id != note_id:
+    # ``note_id`` from the URL is the note the caller has open; the body
+    # carries both endpoints and the kind. The anchor is NOT necessarily
+    # the parent: ``related`` is undirected and the service canonicalises
+    # its endpoints by id, so half of those edges are stored with the
+    # anchor as child, and a directional kind can legitimately be created
+    # from the child's side ("this note grew from that one"). The path id
+    # is therefore checked for membership, not for the parent role.
+    if note_id not in (body.parent_note_id, body.child_note_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
     link = await note_links_svc.link_notes(
         ctx.session,
@@ -1787,15 +1791,25 @@ async def link_notes(
 )
 async def unlink_notes(
     note_id: uuid.UUID,
+    parent_note_id: uuid.UUID,
     child_note_id: uuid.UUID,
     kind: str,
     ctx: Annotated[TenantCtx, Depends(tenant_ctx, scope="function")],
 ) -> None:
+    """Remove one typed note↔note edge. Both endpoints travel
+    explicitly, mirroring the POST body, and ``note_id`` is the note the
+    caller has open rather than the parent. Taking the parent from the
+    path could not name an edge stored with the anchor as child, which is
+    half of every undirected ``related`` edge (the service canonicalises
+    them to parent < child): those were listed by GET and then refused
+    here, which is the one asymmetry the link surface must not have."""
+    if note_id not in (parent_note_id, child_note_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
     removed = await note_links_svc.unlink_notes(
         ctx.session,
         org_id=ctx.org_id,
         actor_id=ctx.user_id,
-        parent_note_id=note_id,
+        parent_note_id=parent_note_id,
         child_note_id=child_note_id,
         kind=kind,
     )

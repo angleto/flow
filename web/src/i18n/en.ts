@@ -1330,6 +1330,7 @@ export const en = {
     loading: 'Loading…',
     outgoing: 'Linked from here',
     incoming: 'Linked here (backlinks)',
+    undirected: 'Connected (no direction)',
     fruits: 'Tasks (fruits)',
     none: 'None.',
     unlink: 'Unlink',

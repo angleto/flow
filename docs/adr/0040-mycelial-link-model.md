@@ -245,3 +245,39 @@ the 1:1 distillation thread. What remains of the commons idea is the
 metaphor's kernel, not the schema: pooled atoms carry no per-claim
 attribution to individual sources in their TEXT — the prose is communal
 even though the provenance edges are not.
+
+## Amendment (2026-09-11) — "do not infer direction" binds the surfaces, not only the store
+
+Status: Accepted. Reported from production: a `related` edge showed on one
+of its two notes and not on the other.
+
+The Consequences above end with "callers must not infer direction from a
+`related` row". The store and the services honoured that; the REST routes
+and the note panel did not, and the three symptoms were the same mistake
+wearing different clothes:
+
+- The "Linked ideas" panel rendered, for an undirected kind, only the rows
+  where the open note was the parent. Since the service canonicalises the
+  pair to `parent < child` by id string, that is half the edges, on the
+  half of the notes whose id sorts higher — invisible, unpredictable, and
+  contradicted by the same edge showing correctly on the other note.
+- `DELETE /notes/{note_id}/links` took the parent from the path, so an
+  edge stored with the anchor as child could not be named at all. Every
+  `related` edge is such an edge from one of its two ends. GET listed
+  them; DELETE answered 404.
+- `POST /notes/{note_id}/links` required the body's parent to equal the
+  path id, which refused the panel's own "swap" affordance for the
+  directional kinds ("this note grew from that one").
+
+The correction: the path id is the note the caller has **open**, not the
+parent. Both routes now require it to be one of the two endpoints and take
+the endpoints themselves from body or query, which is the only address
+that names the same edge from either of its ends.
+
+The read rule that follows is a single one, and it lives in one place
+(`web/src/shared/noteLinks.ts`, asserted against the model's
+`NOTE_NOTE_LINK_UNDIRECTED_KINDS`): for an undirected kind a note has
+**neighbours**, not parents and children, and the stored orientation is
+not shown. Which kinds those are is the model's answer, not a surface's —
+duplicating that table was what let a client disagree with the store while
+both kept working.
