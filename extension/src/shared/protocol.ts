@@ -20,8 +20,6 @@
 //   - and there is exactly one place that can reach the network, which is
 //     what makes the on/off switch a guarantee rather than a hope.
 
-import type { ConnectReply } from '@shared'
-
 export type FailureCode =
   // No response at all: offline, DNS, connection reset.
   | 'network'
@@ -43,6 +41,13 @@ export type FailureCode =
   // actions: reconnect or turn the switch on, versus ask for scope.
   | 'disconnected'
   | 'disabled'
+  // The device-authorization answers, which are 4xx and mean three
+  // different next actions. ``pending`` is the ORDINARY answer for most
+  // of a connect request's life and is not a failure: keep asking. The
+  // other two mean stop, for opposite reasons.
+  | 'pending'
+  | 'denied'
+  | 'expired'
 
 export interface Failure {
   code: FailureCode
@@ -85,10 +90,30 @@ export interface Connection {
    *  workspace and one credential behind all of them -- which is why
    *  revoking is per credential and forgetting is per row. */
   binding?: 'workspace' | 'account'
+  /** When the credential stops working, as the server reported it at
+   *  collection. The panel warns before that date rather than after: a
+   *  credential that expires silently looks like a broken extension, and
+   *  renewing it is the same two clicks that created it. */
+  expiresAt?: string
   /** Set when the credential stopped authenticating, so the panel can
    *  say which workspace needs reconnecting rather than logging
    *  everything out. */
   revoked?: boolean
+}
+
+/** A connect request in flight, as the panel sees it.
+ *
+ *  The long code that collects is deliberately absent: the panel has no
+ *  reason to hold a collecting secret, and the worker is what waits. */
+export interface LinkRequest {
+  /** Short, unambiguous, and meant to be COMPARED with what the approval
+   *  screen shows. Not a secret: on its own it collects nothing. */
+  userCode: string
+  expiresAt: string
+  verificationUrl: string
+  /** Set once the matter is settled badly, so the panel can say what
+   *  happened instead of quietly going back to how it looked. */
+  failure: FailureCode | null
 }
 
 export interface EntityRow {
@@ -198,7 +223,15 @@ export interface Operations {
   'switch/set': { req: { on: boolean }; res: boolean }
 
   'conn/list': { req: void; res: Connection[] }
-  'conn/begin': { req: void; res: { url: string } }
+  /** Opens a device-authorization request and sends the person to
+   *  approve it. What comes back is what the PANEL may show: the code to
+   *  compare and where it sent them, never the half that collects. */
+  'conn/begin': { req: void; res: LinkRequest }
+  /** The request currently open, if any, so a panel reopened mid-ceremony
+   *  shows the code again instead of the button that starts a second
+   *  one. */
+  'conn/link': { req: void; res: LinkRequest | null }
+  'conn/cancelLink': { req: void; res: null }
   'conn/forget': { req: { workspaceId: string }; res: Connection[] }
   'conn/self': { req: { workspaceId: string }; res: { scope: string[] | null } }
 
@@ -250,6 +283,8 @@ export const ALWAYS_AVAILABLE: ReadonlySet<OperationName> = new Set<OperationNam
   'switch/set',
   'conn/list',
   'conn/begin',
+  'conn/link',
+  'conn/cancelLink',
   'conn/forget',
   'scope/get',
 ])
@@ -283,4 +318,3 @@ export async function send<K extends OperationName>(
   }
 }
 
-export type { ConnectReply }

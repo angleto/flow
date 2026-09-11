@@ -42,33 +42,37 @@ export function manifestFor(env) {
     //   activeTab    read the page ONLY at the moment capture is invoked,
     //                and only the tab it was invoked from
     //   scripting    what activeTab is exercised through
+    //   alarms       the net under the connect wait. Chrome shuts an idle
+    //                service worker down, so the fast poll chain cannot be
+    //                the only thing waiting for somebody to approve, and
+    //                the alarm is what wakes the worker to ask again
     //
     // NOT requested, and each absence is a decision:
     //
     //   <all_urls>          no in-page overlay, so no code of ours runs on
     //                       every page you visit
-    //   alarms              nothing needs a background timer, and asking
-    //                       for one invites a review question it cannot
-    //                       answer
     //   notifications       a write that lands after the panel closed is
     //                       reported the next time the panel opens, not by
     //                       interrupting the desktop
     //   tabs                chrome.tabs.create and .query need no
     //                       permission for what this does
     //   unlimitedStorage    the caches are bounded by count on purpose
-    permissions: ['storage', 'sidePanel', 'contextMenus', 'activeTab', 'scripting'],
+    permissions: ['storage', 'sidePanel', 'contextMenus', 'activeTab', 'scripting', 'alarms'],
     host_permissions: [env.hostPermission],
-    // The app origin, and nothing else, may hand this extension a
-    // credential. Chrome fills in the sender's origin, so the page cannot
-    // claim to be somewhere it is not -- which is why this is a handshake
-    // over externally_connectable rather than a content script reading
-    // the page. A content script on the app origin could read the human's
-    // session out of localStorage; this cannot read the page at all.
-    // Omitted entirely for a development build: Chrome refuses a pattern
-    // whose host has no second-level domain, so a package built against
-    // localhost simply cannot receive the handover, and the panel says so
-    // rather than offering a Connect button that can never succeed.
-    ...(env.connectMatch ? { externally_connectable: { matches: [env.connectMatch] } } : {}),
+    // NO externally_connectable, and its absence is the point.
+    //
+    // It used to be here, because the app's settings page minted a
+    // credential and pushed it into this extension over Chrome's
+    // messaging. That is a standing right for a web origin to send
+    // messages to this extension, held permanently to save a few seconds
+    // during a ceremony performed once. It also could not work at all on
+    // a build against localhost -- Chrome refuses a pattern whose host
+    // has no second-level domain -- so a development package could never
+    // connect.
+    //
+    // The extension now ASKS instead: it opens a device-authorization
+    // request, shows a code, and collects what it was granted. Nothing
+    // needs to be able to talk to it, so nothing may.
     commands: {
       _execute_action: {
         suggested_key: { default: 'Ctrl+Shift+K', mac: 'Command+Shift+K' },

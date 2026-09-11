@@ -873,7 +873,23 @@ export const it: Catalog = {
       title: 'Collega questo browser',
       startFromExtension:
         'Una connessione parte sempre dall\'estensione: apri il pannello e premi Collega. Ti riporta qui per approvare, perché questa pagina è l\'unico posto che può mostrarti che cosa stai concedendo.',
-      asking: 'L\'estensione {{id}} chiede di collegarsi ai tuoi workspace.',
+      asking: 'Un\'estensione del browser chiede di collegarsi ai tuoi workspace.',
+      codeLabel: 'Codice da confrontare',
+      compare:
+        'Confronta questo codice con quello che mostra l\'estensione. Se sono diversi, rifiuta: una pagina che ha aperto una richiesta propria e ti ha mandato qui non può conoscere il codice sul tuo schermo.',
+      openedAt: 'Richiesta alle',
+      from: 'Dall\'indirizzo',
+      expiresAt: 'Scade alle',
+      enterCode: 'Oppure inserisci il codice che mostra l\'estensione',
+      codePlaceholder: 'XXXX-XXXX',
+      lookUp: 'Cerca',
+      noSuchRequest:
+        'Nessuna richiesta in attesa dietro questo codice. Può essere già stata risolta, o scaduta. Ricomincia dall\'estensione.',
+      deny: 'Rifiuta',
+      approved: 'Approvata. L\'estensione ritira la credenziale entro pochi secondi e il pannello si apre.',
+      denied: 'Rifiutata. L\'estensione è stata avvisata.',
+      lifetime:
+        'La credenziale dura 90 giorni. Rinnovarla è questa stessa approvazione, e puoi chiuderla prima dall\'elenco qui sotto.',
       grantIntro:
         'Approvando crei per questo browser una credenziale che può fare esattamente questo e nient\'altro:',
       reach:
@@ -882,18 +898,6 @@ export const it: Catalog = {
         'Non può leggere il tuo account, elencare gli altri workspace, creare o rinominare clienti e progetti, modificare i workflow, né cancellare nulla.',
       approve: 'Collega',
       label: 'Estensione browser',
-      done: 'Collegata. Il pannello si apre in {{workspace}} e può passare agli altri.',
-      noRuntime:
-        'La credenziale è stata creata ma questo browser non ha potuto consegnarla all\'estensione: la messaggistica delle estensioni Chrome non è disponibile su questa pagina. Revoca la credenziale qui sotto e riprova da un browser basato su Chromium con l\'estensione installata.',
-      noReply:
-        'La credenziale è stata creata ma l\'estensione non ha risposto. Revocala qui sotto e ricomincia dall\'estensione.',
-      refused: {
-        'unknown-state':
-          'L\'estensione non ha riconosciuto questa richiesta. Ricomincia dall\'estensione invece che da un link salvato.',
-        expired: 'La richiesta è scaduta. Ricomincia dall\'estensione.',
-        'already-connected': 'Quell\'estensione è già collegata.',
-        'wrong-origin': 'L\'estensione ha rifiutato una consegna da questo indirizzo.',
-      },
     },
     connections: {
       title: 'Browser collegati',

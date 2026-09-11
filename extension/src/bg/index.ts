@@ -7,7 +7,7 @@
 // nothing else in this package can reach the network.
 
 import { ALWAYS_AVAILABLE, type Envelope, type OperationName, type Operations, type Result } from '../shared/protocol'
-import { acceptHandover, beginConnect } from './connection'
+import { cancelLink, currentLink, pollLink, pollUntilSettled, startLink, LINK_ALARM } from './linking'
 import { call } from './api'
 import { config } from './config'
 import { create, pageContext, screenshot, sourceLine } from './capture'
@@ -131,15 +131,21 @@ function escapeXml(value: string): string {
 }
 
 // --------------------------------------------------------------------------
-// The connect handover
+// Waiting for somebody to approve
 // --------------------------------------------------------------------------
 
-chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  // sender.origin is filled in by Chrome and cannot be forged by the
-  // page, which is the whole reason this is externally_connectable and
-  // not a content script reading the document.
-  void acceptHandover(message, sender.origin).then(sendResponse)
-  return true
+// The net under the fast poll chain in linking.ts. Chrome shuts an idle
+// worker down, and when it does this is what wakes it; it will not
+// schedule below half a minute, which is fine for a net and would not be
+// fine as the only way of waiting.
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== LINK_ALARM) return
+  void (async () => {
+    if (await pollLink()) return
+    // Settled badly, or still waiting: either way keep the fast chain
+    // running while this wake-up keeps the worker alive.
+    pollUntilSettled()
+  })()
 })
 
 // --------------------------------------------------------------------------
@@ -170,7 +176,19 @@ const handlers: { [K in OperationName]: Handler<K> } = {
   },
 
   'conn/list': async () => ok((await storage.connections()).map(({ secret: _s, ...rest }) => rest)),
-  'conn/begin': async () => ok(await beginConnect()),
+  'conn/begin': async () => {
+    const opened = await startLink()
+    // The fast chain starts HERE and not in the panel: the panel closes
+    // the moment somebody switches to the tab to approve, so it cannot be
+    // the thing that waits.
+    if (opened.ok) pollUntilSettled()
+    return opened
+  },
+  'conn/link': async () => ok(await currentLink()),
+  'conn/cancelLink': async () => {
+    await cancelLink()
+    return ok(null)
+  },
   'conn/forget': async ({ workspaceId }) => {
     // Forgets the secret HERE. It does not revoke on the server, and the
     // panel says so: the app's settings page is where a credential

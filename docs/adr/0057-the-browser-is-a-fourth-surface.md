@@ -1,5 +1,14 @@
 # ADR-0057: The browser is a fourth surface, and it holds a scoped credential
 
+> **Decision 5 of this document is SUPERSEDED by
+> [ADR-0059](0059-the-extension-asks-to-be-let-in.md) (2026-09-11).** The
+> credential is no longer minted by the settings page and pushed into the
+> extension over `externally_connectable`: the extension opens a device
+> authorization request, shows a code to compare, and collects what it was
+> granted. Everything else here stands. The reasoning below is kept as
+> written, including the alternatives it rejected -- which did not include
+> the device grant, and that omission is the subject of 0059.
+
 Status: Accepted (2026-09-03). Amended 2026-09-09 twice: a deployment serves
 its own package, and the credential is bound to the account rather than to one
 workspace (see the amendments at the end).

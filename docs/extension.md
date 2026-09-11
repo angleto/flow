@@ -51,27 +51,40 @@ talks to another.
 
 ## Connecting a browser
 
-A connection always starts in the extension, never in the app. The extension
-opens the settings page with a single-use nonce; the app shows which
-extension is asking, what it would reach, and the exact list of permissions,
-rendered from the server's own catalogue so the screen and the grant cannot
-disagree. Approving mints a credential scoped to that list and hands it to
-the extension.
+A connection always starts in the extension, never in the app, and the
+extension is never handed anything: it ASKS, and collects.
 
-You never type a password into the extension, and the extension never reads
-the app's page.
+1. Press **Connect** in the panel. The extension opens a request and gets
+   two codes: a short one it shows you, and a long one it keeps.
+2. It opens Settings → Browser extension with the short code in the URL.
+   If you are not signed in, you go through the login form and come back.
+3. The page shows what is asking, from which address, since when, the
+   exact permissions in the server's own words, and **the code to
+   compare**. Check it against the one in the panel, then approve.
+4. The extension, which has been asking the whole time, collects its
+   credential. The panel opens.
 
-**If you are not logged in when you press Connect**, the settings page sends
-you to the login form first and returns you to the request afterwards, with
-its nonce intact. The request lives entirely in that URL, so a login detour
-that forgot where it came from did not postpone the connection, it destroyed
-it: you logged in, landed on your notes, and the extension was left waiting
-for an approval that could no longer be given. It looked exactly like an
-extension that needed a login of its own, which is the one thing this design
-exists to avoid. The nonce is valid for five minutes from the moment you
-press Connect, and that clock runs during the login, so a connection
-abandoned halfway is started again from the extension rather than from the
-browser's back button.
+You never type a password into the extension, and the extension never
+reads the app's page.
+
+**Compare the code.** It is the one defence against approving somebody
+else's request: a page that opened a request of its own and sent you here
+cannot know the code your panel is showing. If the two differ, refuse.
+
+**Losing the tab costs you nothing.** The request lives on the server,
+keyed by the code the extension kept, so no redirect, no closed tab and no
+link opened in the wrong browser profile can destroy it. The settings page
+takes the code typed by hand, and the panel keeps showing it until the
+request is answered or lapses. This is the part that used to break: the
+request travelled in the URL, and the login redirect threw it away.
+
+**A request lasts ten minutes.** Nobody answered it in time means open
+another; a new request gets a new code.
+
+**The credential lasts 90 days.** Renewing it is this same ceremony, and
+the panel warns you before it lapses rather than after. Shorter than the
+365 days a machine-to-machine token gets, because this one sits in a
+browser profile on a machine that may be shared.
 
 **Any member may connect their own browser.** The panel can do a fixed,
 narrow subset of what its holder can already do, so the threshold for
@@ -210,7 +223,6 @@ what lets the panel offer "retry" after a timed-out capture rather than only
 | `activeTab` | read the page **only** at the moment you invoke capture, and only the tab you invoked it from |
 | `scripting` | what `activeTab` is exercised through |
 | `host_permissions` on the deployment | the API requests, all of them from the service worker |
-| `externally_connectable` on the deployment | the one origin allowed to hand over a credential |
 
 Not requested: `<all_urls>` (there is no in-page overlay, so no code of ours
 runs on the pages you visit), `alarms`, `notifications`, `tabs`,
@@ -249,15 +261,6 @@ monorepo tag bumps the extension's version even when nothing in it changed,
 which is why upload is a human decision rather than a step in the release
 workflow.
 
-### A development build cannot connect
-
-Chrome refuses an `externally_connectable` pattern whose host has no
-second-level domain, so a package built against `localhost` cannot receive
-the credential handover at all. The manifest omits the entry and the panel
-says so, rather than offering a button that can never succeed. To exercise
-the extension against a local stack, connect it to a deployment with a real
-hostname.
-
 ## Where things are
 
 | Piece | Path |
@@ -267,7 +270,10 @@ hostname.
 | The panel, shared by the popup and the side panel | `extension/src/ui/` |
 | The typed panel↔worker seam | `extension/src/shared/protocol.ts` |
 | Rules shared with the SPA (error envelope, entity code, recents, query grammar, handshake) | `web/src/shared/` |
-| The settings page, the download and the connect flow | `web/src/routes/SettingsExtensionRoute.tsx` |
+| The settings page, the download and the approval screen | `web/src/routes/SettingsExtensionRoute.tsx` |
+| The connect ceremony, extension side | `extension/src/bg/linking.ts` |
+| The grant itself: open, answer, collect | `core/src/mycelium_core/services/device_authorization.py` |
+| Its HTTP surface | `api/src/mycelium_api/routers/device.py` |
 | Carrying an interrupted request across the login form | `web/src/lib/returnTo.ts`, `web/src/components/RequireAuth.tsx` |
 | What a deployment publishes about its package | `extension/scripts/release.mjs`, read by `web/src/shared/extension.ts` |
 | The privacy statement the store listing points at | [`extension-privacy.md`](extension-privacy.md) |

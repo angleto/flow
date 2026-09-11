@@ -2,10 +2,10 @@
 //
 // Two answers, and the page shows one or the other: an archive it serves
 // itself, or the commands to build one. Which one is not a preference —
-// the origin is compiled into the package (`host_permissions` and
-// `externally_connectable` are static manifest declarations), so an
-// archive belongs to exactly one deployment and a deployment that does
-// not serve its own has nothing to offer but the build.
+// the origin is compiled into the package (`host_permissions` is a static
+// manifest declaration), so an archive belongs to exactly one deployment
+// and a deployment that does not serve its own has nothing to offer but
+// the build.
 
 import {
   EXTENSION_RELEASE_URL,

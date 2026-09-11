@@ -65,5 +65,6 @@ Format: Status, Context, Decision, Consequences, Alternatives rejected.
 - [0054 What may become a Causale, and where the tracciato's charset is enforced](0054-what-may-become-a-causale.md)
 - [0055 Two views of one document, not two documents](0055-two-views-of-one-document.md) — revises the single-surface editor decision in `0228012`
 - [0056 An indexing class on the row, not a read boundary](0056-index-scope-opt-out-from-automatic-indexing.md)
-- [0057 The browser is a fourth surface, and it holds a scoped credential](0057-the-browser-is-a-fourth-surface.md)
+- [0057 The browser is a fourth surface, and it holds a scoped credential](0057-the-browser-is-a-fourth-surface.md) — decision 5 (the `externally_connectable` handshake) superseded by [0059](0059-the-extension-asks-to-be-let-in.md)
 - [0058 Refuse to serve behind the schema, serve ahead of it](0058-refuse-to-serve-behind-the-schema.md)
+- [0059 The extension asks to be let in, it is not handed a secret](0059-the-extension-asks-to-be-let-in.md) — supersedes decision 5 of [0057](0057-the-browser-is-a-fourth-surface.md)

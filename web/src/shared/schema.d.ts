@@ -262,6 +262,129 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/device/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Device Authorize Endpoint
+         * @description Open a request. Unauthenticated: the caller is a device holding
+         *     nothing, and what it receives here grants nothing until a person
+         *     approves it.
+         */
+        post: operations["device_authorize_endpoint_auth_device_authorize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/device/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Device Token Endpoint
+         * @description Collect. The credential is created by this call and not before.
+         *
+         *     The domain codes a device branches on, all of them 4xx:
+         *     ``auth.device_pending`` (keep asking), ``auth.device_denied`` and
+         *     ``auth.device_expired`` (stop, for opposite reasons), and
+         *     ``auth.device_code_invalid`` (no such request, or already collected).
+         */
+        post: operations["device_token_endpoint_auth_device_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/device/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Device Pending Endpoint
+         * @description What a person is being asked to approve.
+         *
+         *     Authenticated, and deliberately NOT scoped to the caller: a request
+         *     belongs to nobody until it is answered, and the person reading this
+         *     is the one about to make it theirs. What defends the decision is the
+         *     code comparison, which is why the code is echoed back here.
+         *
+         *     The grant comes from the server's own list for that client, so the
+         *     screen cannot disclose one thing while the mint does another.
+         */
+        get: operations["device_pending_endpoint_auth_device_pending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/device/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Device Approve Endpoint
+         * @description Answer yes. Mints nothing: it records who approved and where, and
+         *     the device collects afterwards.
+         *
+         *     The workspace comes from the request's tenant context, the same one
+         *     every other write here resolves through, never from the body: a
+         *     person approves in the workspace they are looking at, and letting a
+         *     body name one would be letting a page choose the tenancy of a
+         *     credential.
+         */
+        post: operations["device_approve_endpoint_auth_device_approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/device/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Device Deny Endpoint
+         * @description Answer no. The device is told, rather than left on a spinner
+         *     until the request times out.
+         */
+        post: operations["device_deny_endpoint_auth_device_deny_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/users": {
         parameters: {
             query?: never;
@@ -8778,6 +8901,105 @@ export interface components {
             task_id: string;
             link: components["schemas"]["NoteTaskLinkOut"];
         };
+        /** DeviceAnswerIn */
+        DeviceAnswerIn: {
+            /** User Code */
+            user_code: string;
+        };
+        /**
+         * DeviceAuthorizeIn
+         * @description Opened by a device with no session. ``client`` names which of our
+         *     own surfaces is asking, so the approval screen can say what it is
+         *     approving rather than "a device".
+         */
+        DeviceAuthorizeIn: {
+            /** Client */
+            client: string;
+        };
+        /**
+         * DeviceAuthorizeOut
+         * @description Two codes doing two jobs. ``device_code`` is the only one that
+         *     collects anything and is returned exactly once; ``user_code`` is the
+         *     one a person compares against the screen in front of them, and it is
+         *     not a secret.
+         *
+         *     ``verification_path`` is a PATH, not a URL: the device knows which
+         *     deployment it is talking to, and returning an absolute address would
+         *     let this response redirect it somewhere else.
+         */
+        DeviceAuthorizeOut: {
+            /** Device Code */
+            device_code: string;
+            /** User Code */
+            user_code: string;
+            /** Verification Path */
+            verification_path: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Interval */
+            interval: number;
+        };
+        /**
+         * DevicePendingOut
+         * @description What the person is being asked to approve. Everything here is
+         *     read by a human deciding, which is why it carries the code to
+         *     COMPARE, when the request was opened and from where, and the exact
+         *     grant in the server's own words rather than the client's.
+         */
+        DevicePendingOut: {
+            /** User Code */
+            user_code: string;
+            /** Client */
+            client: string;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Origin Ip */
+            origin_ip: string | null;
+            /** Scope */
+            scope: string[];
+        };
+        /** DeviceTokenIn */
+        DeviceTokenIn: {
+            /** Device Code */
+            device_code: string;
+        };
+        /**
+         * DeviceTokenOut
+         * @description What the device collects. ``secret`` exists from this moment and
+         *     not before: it is minted in the transaction that answers this call,
+         *     so a request nobody collects leaves no credential behind.
+         */
+        DeviceTokenOut: {
+            /** Secret */
+            secret: string;
+            /**
+             * Assistant Id
+             * Format: uuid
+             */
+            assistant_id: string;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+            /** Workspace Name */
+            workspace_name: string;
+            /** Scope */
+            scope: string[];
+            /** Expires At */
+            expires_at: string | null;
+        };
         /** DiscardDryRunOut */
         DiscardDryRunOut: {
             /** Discarded */
@@ -15513,6 +15735,170 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": components["schemas"]["LogoutIn"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    device_authorize_endpoint_auth_device_authorize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceAuthorizeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceAuthorizeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    device_token_endpoint_auth_device_token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceTokenIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceTokenOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    device_pending_endpoint_auth_device_pending_get: {
+        parameters: {
+            query: {
+                user_code: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevicePendingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    device_approve_endpoint_auth_device_approve_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-workspace-id": string;
+                "x-project-id"?: string | null;
+                "x-workspace-role"?: string | null;
+                "x-admin-mode"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceAnswerIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    device_deny_endpoint_auth_device_deny_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceAnswerIn"];
             };
         };
         responses: {

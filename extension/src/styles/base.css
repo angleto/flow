@@ -378,3 +378,20 @@ button:focus-visible {
   border-radius: var(--radius);
   padding: var(--myc-s1);
 }
+
+/* The short code, while a connect request is waiting.
+ *
+ * Large, spaced and monospaced because it exists to be READ and compared
+ * against the approval page, character by character, by somebody who has
+ * to notice when two strings differ by one symbol. A code rendered at
+ * body size in the page font is a code nobody actually checks, and the
+ * comparison is the whole defence against approving a request opened by
+ * someone else. */
+.hypha__code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.6rem;
+  letter-spacing: 0.18em;
+  text-align: center;
+  margin: var(--myc-s2) 0;
+  color: var(--text-h);
+}

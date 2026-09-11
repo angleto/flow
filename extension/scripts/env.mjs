@@ -1,11 +1,18 @@
 // The build environment, derived once and validated.
 //
 // Everything a package can reach is decided here: which deployment it
-// talks to, which origin it may fetch from, and which origin may hand it
-// a credential. All three come from ONE value, so a package cannot end up
-// permitted to reach one deployment while its code talks to another --
-// the failure that ships when the host permission and the base URL are
-// maintained separately.
+// talks to and which origin it may fetch from. Both come from ONE value,
+// so a package cannot end up permitted to reach one deployment while its
+// code talks to another -- the failure that ships when the host
+// permission and the base URL are maintained separately.
+//
+// There used to be a third derived value, the origin allowed to hand this
+// extension a credential (``externally_connectable``). Nothing hands it a
+// credential any more: it asks, and collects. One consequence is worth
+// naming because it was a documented limitation for the life of that
+// mechanism -- Chrome refuses such a pattern for a host with no
+// second-level domain, so a package built against localhost could not
+// connect at all. A localhost build connects now.
 //
 // There is NO DEFAULT ORIGIN, and that is the important line in this
 // file. The prior art this borrows from defaulted to its production host
@@ -16,7 +23,7 @@
 
 import { execFileSync } from 'node:child_process'
 
-/** @typedef {{ baseUrl: string, hostPermission: string, connectMatch: string | null, version: string, versionName: string }} BuildEnv */
+/** @typedef {{ baseUrl: string, hostPermission: string, version: string, versionName: string }} BuildEnv */
 
 /** Chrome accepts up to four dot-separated integers below 65536 and
  *  nothing else: no prefix, no suffix, no fifth part. `git describe`
@@ -42,25 +49,6 @@ export function hostPermissionFor(baseUrl) {
   return `${url.protocol}//${url.host}/*`
 }
 
-/** The origin allowed to hand this extension a credential: the app
- *  itself, and nothing else.
- *
- *  Chrome refuses an ``externally_connectable`` pattern whose host has no
- *  second-level domain, so `localhost` and a bare IP cannot appear in one
- *  -- which means a build against a development server CANNOT receive the
- *  handshake at all. That is a platform rule, not something to work
- *  around, so the entry is omitted and the panel says the build cannot
- *  connect. Emitting an invalid pattern instead would make Chrome reject
- *  the whole package with an error about a line nobody wrote by hand.
- *  @param {URL} url @returns {string | null} */
-export function connectMatchFor(url) {
-  const labels = url.hostname.split('.')
-  const hasSecondLevelDomain = labels.length >= 2 && labels.every((part) => part.length > 0)
-  const isIp = /^[\d.]+$/.test(url.hostname) || url.hostname.includes(':')
-  if (!hasSecondLevelDomain || isIp) return null
-  return hostPermissionFor(url.origin)
-}
-
 /** @param {string[]} args @returns {string} */
 function git(args) {
   try {
@@ -76,8 +64,8 @@ export function readBuildEnv(env = process.env) {
   if (!raw) {
     throw new Error(
       'MYCELIUM_EXTENSION_ORIGIN is required and has no default.\n' +
-        'It decides which deployment the package talks to, which origin it\n' +
-        'may fetch from, and which origin may hand it a credential.\n' +
+        'It decides which deployment the package talks to and which origin\n' +
+        'it may fetch from.\n' +
         'Example: MYCELIUM_EXTENSION_ORIGIN=https://mycelium.xeno.garden pnpm build',
     )
   }
@@ -105,7 +93,6 @@ export function readBuildEnv(env = process.env) {
   return {
     baseUrl: url.origin,
     hostPermission: hostPermissionFor(url.origin),
-    connectMatch: connectMatchFor(url),
     version: toChromeVersion(versionName),
     versionName,
   }

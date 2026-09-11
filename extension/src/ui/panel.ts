@@ -14,13 +14,27 @@ import { clear, el, headline, on } from './dom'
 import { renderEditor } from './editor'
 import { m } from './i18n'
 import { type Outcome, renderOutcome } from './outcome'
-import type { Connection, EntityRow, Failure, Host, PageContext, ScopeSel, Sections } from './types'
+import type {
+  Connection,
+  EntityRow,
+  Failure,
+  FailureCode,
+  Host,
+  LinkRequest,
+  PageContext,
+  ScopeSel,
+  Sections,
+} from './types'
 
 export type { Host }
 
 interface State {
   on: boolean
   connections: Connection[]
+  /** The connect request in flight, if any. Held so a panel reopened
+   *  mid-ceremony shows the code again instead of a button that would
+   *  open a second request. */
+  link: LinkRequest | null
   scope: ScopeSel
   q: string
   /** Monotonic, so a slower earlier query cannot overwrite a fresher
@@ -60,6 +74,7 @@ export function mountPanel(root: HTMLElement, host: Host): void {
   const state: State = {
     on: true,
     connections: [],
+    link: null,
     scope: { workspaceId: null, focus: null },
     q: '',
     gen: 0,
@@ -357,13 +372,81 @@ export function mountPanel(root: HTMLElement, host: Host): void {
     on(button, 'click', () => {
       void (async () => {
         const res = await send('conn/begin')
-        if (res.ok) await chrome.tabs.create({ url: res.data.url })
+        if (!res.ok) return fail(res.error)
+        // The worker opened the tab and is already waiting. This panel
+        // closes the moment the person switches to that tab, which is
+        // exactly why it is not the thing that waits.
+        state.link = res.data
+        renderAll()
+      })()
+    })
+    return button
+  }
+
+  /** A request in flight: the code to compare, and what it is for.
+   *
+   *  The code is rendered large and on its own because it exists to be
+   *  READ and checked against the approval screen. A control nobody reads
+   *  defends nothing, and this one is the whole defence against approving
+   *  a request somebody else opened.
+   *
+   *  The link is offered again rather than assumed: the tab may have been
+   *  closed, landed in another profile, or never opened. Typing the code
+   *  into the settings page is the path that always works, and the panel
+   *  says so instead of leaving a reader with a code and nowhere to put
+   *  it. */
+  function renderWaiting(link: LinkRequest): void {
+    if (link.failure) {
+      body.appendChild(el('h2', { text: m('linkFailedTitle') }))
+      body.appendChild(
+        el('p', { class: 'hypha__hint', text: linkFailureMessage(link.failure) }),
+      )
+      body.appendChild(startOverButton())
+      return
+    }
+    body.appendChild(el('h2', { text: m('linkWaitingTitle') }))
+    body.appendChild(el('p', { class: 'hypha__code', text: link.userCode }))
+    body.appendChild(el('p', { class: 'hypha__hint', text: m('linkCompare') }))
+    const open = el('button', { type: 'button' }, [m('linkOpenPage')])
+    on(open, 'click', () => {
+      void chrome.tabs.create({ url: link.verificationUrl })
+    })
+    body.appendChild(open)
+    body.appendChild(startOverButton(m('linkCancel')))
+  }
+
+  /** Each failure means a different next action, so each gets its own
+   *  sentence rather than one "it did not work".
+   *
+   *  Static ``m()`` calls, one per branch, rather than returning a key
+   *  the caller resolves: the catalogue checker can only verify a key it
+   *  can READ in the source, and a key assembled or returned as a value
+   *  is invisible to it. Written this way both halves are checked -- the
+   *  key exists, and nothing is defined that nobody asks for. */
+  function linkFailureMessage(code: FailureCode): string {
+    if (code === 'denied') return m('linkDenied')
+    if (code === 'expired') return m('linkExpired')
+    if (code === 'network' || code === 'timeout') return m('linkUnreachable')
+    return m('linkFailed')
+  }
+
+  function startOverButton(label = m('linkStartOver')): HTMLElement {
+    const button = el('button', { type: 'button', class: 'hypha__linkbtn' }, [label])
+    on(button, 'click', () => {
+      void (async () => {
+        await send('conn/cancelLink')
+        state.link = null
+        renderAll()
       })()
     })
     return button
   }
 
   function renderNotConnected(): void {
+    if (state.link) {
+      renderWaiting(state.link)
+      return
+    }
     body.appendChild(el('h2', { text: m('notConnectedTitle') }))
     body.appendChild(el('p', { class: 'hypha__hint', text: m('notConnectedBody') }))
     body.appendChild(connectButton())
@@ -765,6 +848,11 @@ export function mountPanel(root: HTMLElement, host: Host): void {
     ])
     if (sw.ok) state.on = sw.data
     if (conns.ok) state.connections = conns.data
+    // Asked on every open, because the worker is what waits: a person who
+    // approves in the tab and comes back finds the panel connected, and
+    // one who comes back early finds the code still on screen.
+    const link = await send('conn/link')
+    if (link.ok) state.link = link.data
     if (scope.ok) state.scope = scope.data
     renderAll()
     // A write that finished after the panel closed has nobody to tell.

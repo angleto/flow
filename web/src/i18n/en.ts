@@ -877,8 +877,24 @@ export const en = {
     connect: {
       title: 'Connect this browser',
       startFromExtension:
-        'A connection always starts in the extension: open the panel and press Connect. It brings you back here to approve, because this page is the only place that can show you what is being granted.',
-      asking: 'Extension {{id}} is asking to connect to your workspaces.',
+        'A connection always starts in the extension: open the panel and press Connect. It shows a short code and sends you here to approve, because this page is the only place that can show you what is being granted.',
+      asking: 'A browser extension is asking to connect to your workspaces.',
+      codeLabel: 'Code to compare',
+      compare:
+        'Check this code against the one the extension is showing. If they differ, refuse: a page that opened a request of its own and sent you here cannot know the code on your screen.',
+      openedAt: 'Asked at',
+      from: 'From address',
+      expiresAt: 'Expires at',
+      enterCode: 'Or enter the code the extension is showing',
+      codePlaceholder: 'XXXX-XXXX',
+      lookUp: 'Look it up',
+      noSuchRequest:
+        'No request is waiting behind that code. It may have been answered already, or timed out. Start again from the extension.',
+      deny: 'Refuse',
+      approved: 'Approved. The extension collects its credential within a few seconds and the panel opens.',
+      denied: 'Refused. The extension has been told.',
+      lifetime:
+        'The credential lasts 90 days. Renewing it is this same approval, and you can end it sooner from the list below.',
       grantIntro: 'Approving mints a credential for this browser that can do exactly this and nothing else:',
       reach:
         'It reaches every workspace you belong to, including ones you join later, and in each it acts as you do there: it can do nothing you cannot do yourself, and nothing at all in a workspace you are not a member of.',
@@ -886,18 +902,6 @@ export const en = {
         'It cannot read your account, change what you may do anywhere, create or rename clients and projects, edit workflows, or delete anything.',
       approve: 'Connect',
       label: 'Browser extension',
-      done: 'Connected. The panel opens in {{workspace}} and can switch to your others.',
-      noRuntime:
-        'The credential was created but this browser could not hand it to the extension. Chrome extension messaging is not available on this page. Revoke the credential below and try again from a Chromium-based browser with the extension installed.',
-      noReply:
-        'The credential was created but the extension did not answer. Revoke it below and start again from the extension.',
-      refused: {
-        'unknown-state':
-          'The extension did not recognise this request. Start again from the extension rather than from a bookmarked link.',
-        expired: 'The request timed out. Start again from the extension.',
-        'already-connected': 'That extension is already connected.',
-        'wrong-origin': 'The extension refused a handover from this address.',
-      },
     },
     connections: {
       title: 'Connected browsers',

@@ -307,5 +307,35 @@
   },
   "workspaceLabel": {
     "message": "Workspace"
+  },
+  "linkWaitingTitle": {
+    "message": "Waiting for you to approve"
+  },
+  "linkCompare": {
+    "message": "Check this code against the one on the approval page, then approve there. If they differ, refuse: a page that opened a request of its own cannot know the code on this panel."
+  },
+  "linkOpenPage": {
+    "message": "Open the approval page"
+  },
+  "linkCancel": {
+    "message": "Cancel"
+  },
+  "linkStartOver": {
+    "message": "Start again"
+  },
+  "linkFailedTitle": {
+    "message": "The connection did not happen"
+  },
+  "linkDenied": {
+    "message": "You refused this request. Start again if that was not what you meant."
+  },
+  "linkExpired": {
+    "message": "Nobody approved it in time. Start again: a new request gets a new code."
+  },
+  "linkUnreachable": {
+    "message": "This browser could not reach the server. Check the connection and start again."
+  },
+  "linkFailed": {
+    "message": "The server refused the request. Start again from here."
   }
 }

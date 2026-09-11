@@ -1,22 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 import {
-  CONNECT_EXTENSION_ID_PARAM,
-  CONNECT_MESSAGE_KIND,
-  CONNECT_STATE_PARAM,
-  type ConnectMessage,
-  type ConnectReply,
+  CONNECT_CODE_PARAM,
   EXTENSION_PACKAGE_DIR,
-  EXTENSION_PROVIDER,
-  EXTENSION_SCOPES,
   type ExtensionRelease,
 } from '../shared'
-import { useMyWorkspace } from '../auth/useMyWorkspace'
-import { type Assistant, type Scope, aiApi } from '../lib/aiAssistants'
-import { chromeRuntime, handOver } from '../lib/extensionMessaging'
+import {
+  type Assistant,
+  type DevicePending,
+  EXTENSION_PROVIDER,
+  type Scope,
+  aiApi,
+  deviceApi,
+} from '../lib/aiAssistants'
 import { buildCommandsFor, loadRelease } from '../lib/extensionPackage'
-import { getTheme } from '../lib/theme'
 
 // Settings -> Browser extension.
 //
@@ -35,9 +33,19 @@ import { getTheme } from '../lib/theme'
 // happen to run the deployment.
 //
 // ONE page, reached two ways: a person clicking through Settings, and the
-// extension opening it with ``?state=&id=``. A second "consent page" would
-// be a second place the disclosure lives, and the one that drifts is
-// always the one nobody opens by hand.
+// extension opening it with ``?code=``. A second "consent page" would be a
+// second place the disclosure lives, and the one that drifts is always the
+// one nobody opens by hand.
+//
+// WHAT THIS PAGE NO LONGER DOES, because it is the interesting half. It
+// used to mint the credential itself and push it into the extension over
+// Chrome's messaging. Three things came with that and all three are gone:
+// a credential that existed before anyone knew the extension would take it
+// (so a failed handover left one live and unheld), a request that lived in
+// the query string (so any redirect could destroy it, and the login
+// redirect did), and a standing right for this origin to send messages to
+// an extension. The page now only ANSWERS: the server holds the request,
+// and the extension collects what it was granted by asking.
 
 // The store listing is a property of the PRODUCT, not of a deployment:
 // there is one item, and every deployment's users install the same one.
@@ -48,11 +56,8 @@ const STORE_URL: string | null = null
 export function SettingsExtensionRoute() {
   const { t } = useTranslation()
   const [params, setParams] = useSearchParams()
-  const { ws } = useMyWorkspace()
 
-  const requestState = params.get(CONNECT_STATE_PARAM)
-  const requestExtensionId = params.get(CONNECT_EXTENSION_ID_PARAM)
-  const pending = !!requestState && !!requestExtensionId
+  const requestCode = params.get(CONNECT_CODE_PARAM)
 
   const [catalog, setCatalog] = useState<Scope[]>([])
   const [connections, setConnections] = useState<Assistant[] | null>(null)
@@ -63,6 +68,18 @@ export function SettingsExtensionRoute() {
   // opposite instructions on the screen, so rendering either one early
   // would show a reader steps for the wrong path and then swap them.
   const [release, setRelease] = useState<ExtensionRelease | null | undefined>(undefined)
+  // The answer, TAGGED with the code it answers. Tagged rather than bare
+  // so the three display states can be derived at render instead of
+  // written by an effect: a page with no code has nothing pending without
+  // anyone having to store that, and a code whose answer has not arrived
+  // is distinguishable from one whose answer was "nothing". Storing it
+  // instead meant an effect that set state synchronously to reset between
+  // codes, which is the cascading-render shape the linter refuses and the
+  // stale-answer bug it stands in front of.
+  const [answer, setAnswer] = useState<{ code: string; value: DevicePending | null } | null>(
+    null,
+  )
+  const [typedCode, setTypedCode] = useState('')
 
   const reload = useCallback(async () => {
     try {
@@ -86,6 +103,27 @@ export function SettingsExtensionRoute() {
   }, [])
 
   useEffect(() => {
+    if (!requestCode) return
+    let live = true
+    void (async () => {
+      try {
+        const found = await deviceApi.pending(requestCode)
+        if (live) setAnswer({ code: requestCode, value: found })
+      } catch {
+        // Every shape of "not a live request" is one answer from the
+        // server, on purpose: a person deciding has no use for the
+        // difference between never-existed, already-answered and
+        // expired, and the distinctions are only useful to somebody
+        // sweeping the space. So the page says what the server says.
+        if (live) setAnswer({ code: requestCode, value: null })
+      }
+    })()
+    return () => {
+      live = false
+    }
+  }, [requestCode])
+
+  useEffect(() => {
     let live = true
     void (async () => {
       await reload()
@@ -107,81 +145,41 @@ export function SettingsExtensionRoute() {
 
   const buildCommands = useMemo(() => buildCommandsFor(window.location.origin), [])
 
+  // null: nothing to approve (no code, or the code matched no live
+  // request). undefined: a code whose answer has not come back yet.
+  const pending: DevicePending | null | undefined = !requestCode
+    ? null
+    : answer?.code === requestCode
+      ? answer.value
+      : undefined
+
+  // What the SERVER says it will grant for this request, decorated with
+  // the catalogue's wording. Not a list in this bundle: the page that
+  // discloses and the code that mints must not be able to disagree, and
+  // the only way to guarantee that is to render the minting side's answer.
   const granted = useMemo(() => {
     const byKey = new Map(catalog.map((s) => [s.key, s]))
-    return EXTENSION_SCOPES.map((key) => ({ key, def: byKey.get(key) }))
-  }, [catalog])
+    return (pending?.scope ?? []).map((key) => ({ key, def: byKey.get(key) }))
+  }, [catalog, pending])
 
   function clearRequest() {
     const next = new URLSearchParams(params)
-    next.delete(CONNECT_STATE_PARAM)
-    next.delete(CONNECT_EXTENSION_ID_PARAM)
+    next.delete(CONNECT_CODE_PARAM)
     setParams(next, { replace: true })
   }
 
-  async function onConnect() {
-    if (!requestState || !requestExtensionId || !ws) return
+  async function onApprove() {
+    if (!pending) return
     setBusy(true)
     setErr(null)
     setNotice(null)
     try {
-      const created = await aiApi.create({
-        // Not named after a workspace: this credential is not one. The
-        // label is what the person recognises in the list of credentials
-        // when they come back to revoke it.
-        label: t('ext.connect.label'),
-        provider: EXTENSION_PROVIDER,
-        scope: [...EXTENSION_SCOPES],
-        // The panel sits over the account, not over one workspace: a
-        // person moves between their workspaces on one login, and one
-        // credential per workspace would put several long-lived secrets
-        // in the same browser profile to buy nothing. The server accepts
-        // this only for the scope list above, and every operation is
-        // still authorized by this person's own role in whichever
-        // workspace the request names.
-        workspace_binding: 'account',
-      })
-      const message: ConnectMessage = {
-        kind: CONNECT_MESSAGE_KIND,
-        state: requestState,
-        secret: created.raw_secret,
-        workspace: { id: ws.id, name: ws.name },
-        assistantId: created.assistant.id,
-        // What the SERVER granted, not what this file asked for. If the
-        // two ever differ, the extension must report the truth.
-        scope: created.assistant.scope,
-        theme: getTheme(),
-      }
-      const runtime = chromeRuntime()
-      if (!runtime?.sendMessage) {
-        // The credential now exists and nobody can hold it. Say so, and
-        // leave the row visible below so it can be revoked -- silently
-        // dropping it would leave a live credential nobody knows about.
-        setErr(t('ext.connect.noRuntime'))
-        await reload()
-        return
-      }
-      const { reply, lastError } = await handOver(runtime, requestExtensionId, message)
-      if (!reply?.ok) {
-        // Static t() calls, one per reason, rather than a key built from
-        // the reason: the i18n gate can only verify a key it can read in
-        // the source, and Record<> makes a missing reason a compile
-        // error, so both halves are checked instead of neither.
-        const refusal: Record<NonNullable<ConnectReply['reason']>, () => string> = {
-          'unknown-state': () => t('ext.connect.refused.unknown-state'),
-          expired: () => t('ext.connect.refused.expired'),
-          'already-connected': () => t('ext.connect.refused.already-connected'),
-          'wrong-origin': () => t('ext.connect.refused.wrong-origin'),
-        }
-        setErr(
-          reply?.reason
-            ? refusal[reply.reason]()
-            : (lastError ?? t('ext.connect.noReply')),
-        )
-        await reload()
-        return
-      }
-      setNotice(t('ext.connect.done', { workspace: ws.name }))
+      await deviceApi.approve(pending.user_code)
+      // Nothing was minted by this click. The extension is still asking,
+      // and what it collects will be created by that call -- which is why
+      // this says "approved" and not "connected": the panel is the thing
+      // that can report the second half, and it will, within seconds.
+      setNotice(t('ext.connect.approved'))
       clearRequest()
       await reload()
     } catch (e) {
@@ -189,6 +187,31 @@ export function SettingsExtensionRoute() {
     } finally {
       setBusy(false)
     }
+  }
+
+  async function onDeny() {
+    if (!pending) return
+    setBusy(true)
+    setErr(null)
+    try {
+      await deviceApi.deny(pending.user_code)
+      // Told, rather than left to time out: somebody decided something,
+      // and the extension should stop asking instead of showing a
+      // spinner for ten minutes.
+      setNotice(t('ext.connect.denied'))
+      clearRequest()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function onLookUp(e: FormEvent) {
+    e.preventDefault()
+    const next = new URLSearchParams(params)
+    next.set(CONNECT_CODE_PARAM, typedCode.trim())
+    setParams(next, { replace: true })
   }
 
   async function onRevoke(a: Assistant) {
@@ -255,14 +278,28 @@ export function SettingsExtensionRoute() {
 
       <section className="card">
         <h2>{t('ext.connect.title')}</h2>
-        {pending ? (
+        {pending === undefined ? (
+          <p className="hint">{t('common.loading')}</p>
+        ) : pending ? (
           <>
-            <p>
-              {t('ext.connect.asking', {
-                id: requestExtensionId,
-                workspace: ws?.name ?? '',
-              })}
+            <p>{t('ext.connect.asking')}</p>
+            {/* The comparison, and it is the whole defence against
+                approving somebody else's request: a page that opened a
+                request of its own and sent you here shows a code that is
+                not the one on your screen. Rendered large and on its own,
+                because a control nobody reads defends nothing. */}
+            <p className="ext__code" aria-label={t('ext.connect.codeLabel')}>
+              {pending.user_code}
             </p>
+            <p className="muted">{t('ext.connect.compare')}</p>
+            <dl className="ext__facts">
+              <dt>{t('ext.connect.openedAt')}</dt>
+              <dd>{new Date(pending.opened_at).toLocaleString()}</dd>
+              <dt>{t('ext.connect.from')}</dt>
+              <dd>{pending.origin_ip ?? t('common.dashEmpty')}</dd>
+              <dt>{t('ext.connect.expiresAt')}</dt>
+              <dd>{new Date(pending.expires_at).toLocaleTimeString()}</dd>
+            </dl>
             <p className="muted">{t('ext.connect.grantIntro')}</p>
             <ul className="ext__scopes">
               {granted.map(({ key, def }) => (
@@ -274,15 +311,38 @@ export function SettingsExtensionRoute() {
             </ul>
             <p className="hint">{t('ext.connect.reach')}</p>
             <p className="hint">{t('ext.connect.notGranted')}</p>
-            <button type="button" disabled={busy || !ws} onClick={() => void onConnect()}>
+            <p className="hint">{t('ext.connect.lifetime')}</p>
+            <button type="button" disabled={busy} onClick={() => void onApprove()}>
               {t('ext.connect.approve')}
             </button>
-            <button type="button" className="link" disabled={busy} onClick={clearRequest}>
-              {t('common.cancel')}
+            <button type="button" disabled={busy} onClick={() => void onDeny()}>
+              {t('ext.connect.deny')}
             </button>
           </>
         ) : (
-          <p className="muted">{t('ext.connect.startFromExtension')}</p>
+          <>
+            <p className="muted">{t('ext.connect.startFromExtension')}</p>
+            {/* Typing the code by hand is the path that always works. The
+                extension opens this page with ?code= as a convenience, and
+                a convenience is exactly the thing that can fail: a browser
+                that would not open the tab, a link opened in another
+                profile, a reader who closed it. */}
+            <form onSubmit={onLookUp} className="ext__codeform">
+              <label htmlFor="ext-code">{t('ext.connect.enterCode')}</label>
+              <input
+                id="ext-code"
+                value={typedCode}
+                onChange={(e) => setTypedCode(e.target.value)}
+                placeholder={t('ext.connect.codePlaceholder')}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <button type="submit" disabled={busy || !typedCode.trim()}>
+                {t('ext.connect.lookUp')}
+              </button>
+            </form>
+            {requestCode && <p className="hint">{t('ext.connect.noSuchRequest')}</p>}
+          </>
         )}
         {notice && (
           <p className="ok" role="status">

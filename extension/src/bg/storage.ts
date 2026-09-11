@@ -6,7 +6,7 @@
 //            the alternative is re-running the connect ceremony every
 //            morning -- which trains a person to click through a security
 //            screen, the exact habit it exists to prevent.
-//   session  dies with the browser process. The connect nonce, the
+//   session  dies with the browser process. The connect request, the
 //            caches, and an unsent draft.
 //
 // ATTRIBUTABLE marks a key that holds something about the person: their
@@ -25,7 +25,7 @@
 // the operating system's, not ours.
 
 import type { RecentItem } from '@shared'
-import type { Connection, EntityRow, ScopeSel } from '../shared/protocol'
+import type { Connection, EntityRow, LinkRequest, ScopeSel } from '../shared/protocol'
 
 const LOCAL = {
   /** Master switch. Absent means ON: a fresh install works, and turning
@@ -47,8 +47,12 @@ const LOCAL = {
 } as const
 
 const SESSION = {
-  /** The connect nonce, with its expiry. Single use. */
-  nonce: 'nonce',
+  /** The connect request in flight: the short code, where the person was
+   *  sent, when it lapses, and the long code that collects. SESSION, not
+   *  local: an unanswered ceremony is not worth surviving a browser
+   *  restart, and the long code is the one value here that collects
+   *  anything. */
+  link: 'link',
   /** `cache:<workspaceId>:<key>` -> a TTL entry. ATTRIBUTABLE. */
   cachePrefix: 'cache:',
   /** `draft:<kind>` -> an unsent capture. The person's own work. */
@@ -56,6 +60,12 @@ const SESSION = {
   /** Outcomes of writes that finished after the panel closed. */
   sinceYouLeft: 'sinceYouLeft',
 } as const
+
+/** The stored half of a connect request: what the panel sees, plus the
+ *  long code, which it does not. */
+export interface StoredLink extends LinkRequest {
+  deviceCode: string
+}
 
 export interface StoredConnection extends Connection {
   secret: string
@@ -132,16 +142,14 @@ export const storage = {
     await chrome.storage.local.set({ [LOCAL.recentsPrefix + workspaceId]: rows })
   },
 
-  async nonce(): Promise<{ value: string; expiresAt: number } | undefined> {
-    return readSession<{ value: string; expiresAt: number }>(SESSION.nonce)
+  async getLink(): Promise<StoredLink | undefined> {
+    return readSession<StoredLink>(SESSION.link)
   },
-  async setNonce(value: string, ttlMs: number): Promise<void> {
-    await chrome.storage.session.set({
-      [SESSION.nonce]: { value, expiresAt: Date.now() + ttlMs },
-    })
+  async setLink(link: StoredLink): Promise<void> {
+    await chrome.storage.session.set({ [SESSION.link]: link })
   },
-  async clearNonce(): Promise<void> {
-    await chrome.storage.session.remove(SESSION.nonce)
+  async clearLink(): Promise<void> {
+    await chrome.storage.session.remove(SESSION.link)
   },
 
   async sinceYouLeft(): Promise<{ ok: number; failed: string[] }> {

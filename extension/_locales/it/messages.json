@@ -307,5 +307,35 @@
   },
   "workspaceLabel": {
     "message": "Workspace"
+  },
+  "linkWaitingTitle": {
+    "message": "In attesa della tua approvazione"
+  },
+  "linkCompare": {
+    "message": "Confronta questo codice con quello sulla pagina di approvazione, poi approva lì. Se sono diversi, rifiuta: una pagina che ha aperto una richiesta propria non può conoscere il codice su questo pannello."
+  },
+  "linkOpenPage": {
+    "message": "Apri la pagina di approvazione"
+  },
+  "linkCancel": {
+    "message": "Annulla"
+  },
+  "linkStartOver": {
+    "message": "Ricomincia"
+  },
+  "linkFailedTitle": {
+    "message": "Il collegamento non è avvenuto"
+  },
+  "linkDenied": {
+    "message": "Hai rifiutato questa richiesta. Ricomincia se non era quello che intendevi."
+  },
+  "linkExpired": {
+    "message": "Nessuno l'ha approvata in tempo. Ricomincia: una richiesta nuova ha un codice nuovo."
+  },
+  "linkUnreachable": {
+    "message": "Questo browser non ha raggiunto il server. Controlla la connessione e ricomincia."
+  },
+  "linkFailed": {
+    "message": "Il server ha rifiutato la richiesta. Ricomincia da qui."
   }
 }

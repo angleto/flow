@@ -234,3 +234,82 @@ async function markRevoked(dead: StoredConnection): Promise<void> {
     await clearCaches(row.workspaceId)
   }
 }
+
+/** The two device-authorization calls, which carry no credential because
+ *  the whole point is that there is not one yet.
+ *
+ *  Here rather than in linking.ts for the reason at the top of this file:
+ *  there is exactly ONE place that reaches the network, and that is what
+ *  makes the on/off switch a guarantee rather than a hope. A connect
+ *  ceremony that fetched on its own would be a second place, and the one
+ *  that is easiest to forget when auditing what the extension talks to.
+ *
+ *  No Authorization header, no workspace header, and no retry: the caller
+ *  is a poll loop that will ask again on its own schedule, so a failure
+ *  here is reported rather than repaired. */
+export async function callUnauthenticated<T>(
+  path: string,
+  body: unknown,
+): Promise<Result<T>> {
+  const correlationId = mintCorrelationId()
+  const timer = new AbortController()
+  const deadlineTimer = setTimeout(() => timer.abort(), READ_DEADLINE_MS)
+  let res: Response
+  try {
+    res = await fetch(config.apiUrl + path, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Correlation-Id': correlationId,
+        'Accept-Language': language(),
+      },
+      body: JSON.stringify(body),
+      signal: timer.signal,
+    })
+  } catch {
+    clearTimeout(deadlineTimer)
+    const timedOut = timer.signal.aborted
+    return {
+      ok: false,
+      error: {
+        code: timedOut ? 'timeout' : 'network',
+        message: timedOut ? 'deadline' : 'unreachable',
+        // A poll loop asks again by itself; saying "retryable" here would
+        // invite a second mechanism to do the same thing.
+        retryable: false,
+        correlationId,
+      },
+    }
+  }
+  clearTimeout(deadlineTimer)
+
+  if (res.ok) return { ok: true, data: (await readBody(res)) as T }
+
+  const payload = await readBody(res)
+  const domain = errCode(payload)
+  return {
+    ok: false,
+    error: {
+      // The DOMAIN code decides, not the status: waiting, refused and
+      // timed out all arrive as 400, and they mean keep asking, stop, and
+      // start again. Reading the status alone would collapse three
+      // different next actions into one.
+      code: deviceFailure(domain) ?? statusToCode(res.status),
+      message: errMessage(payload, domain ?? `HTTP ${res.status}`),
+      retryable: false,
+      correlationId:
+        (payload as { correlation_id?: string } | null)?.correlation_id ?? correlationId,
+    },
+  }
+}
+
+/** The server's domain codes for this flow, mapped to what the caller
+ *  does next. Anything else falls through to the status. */
+function deviceFailure(domain: string | undefined): FailureCode | undefined {
+  if (domain === 'auth.device_pending') return 'pending'
+  if (domain === 'auth.device_denied') return 'denied'
+  if (domain === 'auth.device_expired') return 'expired'
+  if (domain === 'auth.device_code_invalid') return 'not_found'
+  return undefined
+}

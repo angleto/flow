@@ -1,118 +1,51 @@
 // The contract between the app and the browser extension.
 //
-// Both sides need the same answers and neither can be the authority: the
-// app MINTS the credential and must disclose exactly what it is granting,
-// the extension RECEIVES it and must be able to say what it holds. Written
-// twice, the disclosure and the grant drift, and the direction that drift
-// takes is always the same one -- the consent screen keeps saying what the
-// grant used to be.
+// Much smaller than it was, and the shrinking is the point. This file used
+// to carry the whole handover: the message kind, the nonce parameter, the
+// shape of the credential in flight, and a copy of the scope list so the
+// consent screen could name what it was granting. All of it existed because
+// the PAGE minted the credential and pushed it into the extension.
+//
+// The server mints it now, and hands it to the extension when the extension
+// asks. So the grant is disclosed from the server's own answer
+// (``/auth/device/pending`` returns the scope it will actually mint), and
+// what is left here is a route, a query parameter, and the descriptor of the
+// package a deployment serves. A list that cannot drift because it is no
+// longer written twice.
 //
 // Pure by contract: this directory is compiled into both packages and
 // imports nothing.
 
-/** The scopes the extension asks for, and nothing beyond them.
+/** The parameter the extension puts in the URL when it sends somebody to
+ *  approve it, and the route it sends them to.
  *
- *  Each line is a capability the panel actually uses. Two are deliberately
- *  ABSENT and the absence is the design:
+ *  ONE value, and it is not a secret: the short code the person compares
+ *  against what the extension is showing. It collects nothing on its own
+ *  -- only the long code the extension keeps can do that -- so losing it,
+ *  logging it or bookmarking it grants nobody anything.
  *
- *  - ``workflows:write`` would let it delete the state machine every task
- *    in the workspace runs on. Advancing one task is ``tasks:state``.
- *  - ``tags:write`` would let it invent, rename and rescope the taxonomy.
- *    Filing a task into a client or project that already exists is
- *    ``tags:assign``.
+ *  That is the difference from the handshake this replaces, which carried
+ *  a nonce the extension was holding and could therefore be destroyed by
+ *  any redirect between the URL and the reader. Here the request lives on
+ *  the server, keyed by the code the extension kept, and the URL is only
+ *  a convenience that saves typing.
  *
- *  Both narrow keys exist because this list was written: the wide ones were
- *  each doing two jobs, and a client that needed the small power had to be
- *  granted the large one. */
-export const EXTENSION_SCOPES: readonly string[] = [
-  'tasks:read',
-  'tasks:write',
-  'tasks:state',
-  'notes:read',
-  'notes:write',
-  'tags:read',
-  'tags:assign',
-  'workflows:read',
-  'search:read',
-  'search:write',
-  'attachments:write',
-] as const
-
-/** What an assistant row minted for the extension carries, so the app can
- *  list "connected browsers" without guessing which rows are which and
- *  without a second table. */
-export const EXTENSION_PROVIDER = 'mycelium-extension'
-
-/** The route the extension opens to ask for a connection. It is a normal
- *  settings page, reached two ways: a person clicking through Settings,
- *  and the extension opening it with the two parameters below. One page,
- *  so the disclosure cannot differ between the two paths. */
+ *  The route is a normal settings page, reached two ways: a person
+ *  clicking through Settings, and the extension opening it with the
+ *  parameter. One page, so the disclosure cannot differ between them. */
 export const CONNECT_ROUTE = '/settings/extension'
-
-/** Query parameters of a connect request.
- *
- *  ``state`` is a single-use nonce the extension minted and is holding: it
- *  is what stops a page the user did not open from claiming a credential,
- *  because the extension refuses a handover whose nonce it does not
- *  recognise. It is NOT a secret and NOT an authorization input; it only
- *  has to be unguessable and short-lived.
- *
- *  ``id`` is the extension's own id, shown to the person so the screen can
- *  name what is asking. The extension verifies the ORIGIN of the message
- *  it receives rather than trusting anything in this URL. */
-export const CONNECT_STATE_PARAM = 'state'
-export const CONNECT_EXTENSION_ID_PARAM = 'id'
-
-/** The message the app posts to the extension once a person has approved.
- *
- *  The secret travels as a structured clone between two contexts of one
- *  browser: never a URL, never a header, never the DOM, never a log. The
- *  extension checks the sender's origin -- which Chrome fills in, and the
- *  page cannot forge -- before it looks at anything in here. */
-export const CONNECT_MESSAGE_KIND = 'mycelium/connect'
-
-export interface ConnectMessage {
-  kind: typeof CONNECT_MESSAGE_KIND
-  /** Echo of the nonce, so the extension can tell its own request from
-   *  one it never made. */
-  state: string
-  /** The raw ``mycelium_at_`` value, returned by the server exactly once. */
-  secret: string
-  /** Where the panel should OPEN, which is the workspace the person was
-   *  looking at when they approved. Not the credential's perimeter: that
-   *  is every workspace they belong to, and the extension asks the server
-   *  for it rather than believing a page. */
-  workspace: { id: string; name: string }
-  /** The assistant row behind the credential. The extension shows it so a
-   *  person can find the right row to revoke, and revocation is the app's
-   *  job -- disconnecting in the browser only forgets the secret. */
-  assistantId: string
-  /** What was actually granted, from the server's answer rather than from
-   *  this file, so the extension reports the truth if the two ever differ. */
-  scope: string[]
-  /** The reader's current theme choice, carried once so a freshly
-   *  connected panel does not open in the wrong palette. Not a setting the
-   *  app owns afterwards: the extension has its own. */
-  theme?: 'auto' | 'light' | 'dark'
-}
-
-export interface ConnectReply {
-  ok: boolean
-  /** Present when ok is false: why the extension refused, so the page can
-   *  say something better than "it did not work". */
-  reason?: 'unknown-state' | 'expired' | 'already-connected' | 'wrong-origin'
-}
+export const CONNECT_CODE_PARAM = 'code'
 
 /** Where a deployment publishes the package it serves, and the descriptor
  *  that says what that package is.
  *
  *  The origin the extension talks to is compiled into it: `host_permissions`
- *  and `externally_connectable` are static manifest declarations, so one
- *  archive cannot serve two deployments, and an archive published centrally
- *  would point every installer at whichever deployment built it. The
- *  deployment therefore serves its own, and the page shows the download only
- *  when the descriptor names the origin the page is itself being served
- *  from: offering one that could not connect is worse than offering none.
+ *  is a static manifest declaration, so one archive cannot serve two
+ *  deployments, and an archive published centrally would point every
+ *  installer at whichever deployment built it. The deployment therefore
+ *  serves its own, and the page shows the download only when the descriptor
+ *  names the origin the page is itself being served from: offering one that
+ *  could not reach this deployment is worse than offering none.
  *
  *  The producer is `extension/scripts/release.mjs`, in the other package.
  *  Both directions are asserted by `extension/tests/release.test.ts`. */
@@ -120,8 +53,7 @@ export const EXTENSION_PACKAGE_DIR = '/extension/'
 export const EXTENSION_RELEASE_URL = `${EXTENSION_PACKAGE_DIR}release.json`
 
 export interface ExtensionRelease {
-  /** The deployment the package inside the archive talks to, and the only
-   *  origin that can hand it a credential. */
+  /** The deployment the package inside the archive talks to. */
   origin: string
   /** What Chrome compares (`2.3.10`) and what a person reads on
    *  chrome://extensions (`v2.3.10-3-gabc1234`). */

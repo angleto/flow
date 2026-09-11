@@ -77,6 +77,14 @@ const FAILURE_TEXT: Record<Failure['code'], () => string> = {
   not_found: () => '',
   conflict: () => '',
   invalid: () => '',
+  // The connect ceremony's three answers never reach this table: they are
+  // rendered by the panel's waiting view, which is the only surface that
+  // knows what to offer next for each. They are here because the record
+  // is exhaustive over the codes, and that exhaustiveness is what makes a
+  // new code a compile error rather than a blank line on screen.
+  pending: () => '',
+  denied: () => '',
+  expired: () => '',
 }
 
 export function failureText(failure: Failure): string {

@@ -43,6 +43,16 @@ export type Assistant = {
  *  moment the value exists outside the server; nothing re-reads it. */
 export type AssistantCreated = { assistant: Assistant; raw_secret: string }
 
+/** What a credential minted for the browser extension carries, so this
+ *  page can list "connected browsers" without a second table.
+ *
+ *  Mirrors ``mycelium_core.mcp_scopes.EXTENSION_PROVIDER``, which is the
+ *  authority: the server writes this value, nothing here does. It is a
+ *  DISPLAY FILTER and not a boundary -- were the two ever to drift, the
+ *  list on the page would come up empty, which is visible and harmless,
+ *  rather than showing or granting anything it should not. */
+export const EXTENSION_PROVIDER = 'mycelium-extension'
+
 export const CATEGORY_ORDER: readonly ScopeCategory[] = ['read', 'write', 'danger']
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -78,4 +88,38 @@ export const aiApi = {
     call<Assistant>(`/ai-assistants/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   remove: (id: string) => call<void>(`/ai-assistants/${id}`, { method: 'DELETE' }),
   rotate: (id: string) => call<AssistantCreated>(`/ai-assistants/${id}/rotate`, { method: 'POST' }),
+}
+
+/** A device asking to be let in, as the person approving it sees it.
+ *
+ *  ``user_code`` is echoed back so the screen can show what to COMPARE:
+ *  the defence against approving somebody else's request is that the code
+ *  on the screen and the code on the device are the same one, and a page
+ *  that could not display it would have nothing to compare.
+ *
+ *  ``scope`` comes from the server's own list for that client, never from
+ *  a constant in this bundle, so the disclosure and the grant cannot
+ *  disagree. */
+export type DevicePending = {
+  user_code: string
+  client: string
+  opened_at: string
+  expires_at: string
+  origin_ip: string | null
+  scope: string[]
+}
+
+export const deviceApi = {
+  pending: (userCode: string) =>
+    call<DevicePending>(`/auth/device/pending?user_code=${encodeURIComponent(userCode)}`),
+  approve: (userCode: string) =>
+    call<void>('/auth/device/approve', {
+      method: 'POST',
+      body: JSON.stringify({ user_code: userCode }),
+    }),
+  deny: (userCode: string) =>
+    call<void>('/auth/device/deny', {
+      method: 'POST',
+      body: JSON.stringify({ user_code: userCode }),
+    }),
 }

@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { connectMatchFor, hostPermissionFor, readBuildEnv, toChromeVersion } from '../scripts/env.mjs'
+import { hostPermissionFor, readBuildEnv, toChromeVersion } from '../scripts/env.mjs'
 import { manifestFor } from '../scripts/manifest.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -48,16 +48,6 @@ describe('the build environment', () => {
     expect(toChromeVersion('99999.1')).toBe('65535.1')
     expect(toChromeVersion('nothing-numeric')).toBe('0.0.0')
   })
-
-  it('omits the connect origin where Chrome would refuse the pattern', () => {
-    // externally_connectable needs a second-level domain, so a build
-    // against a development server cannot receive the handover at all.
-    // Emitting an invalid pattern would make Chrome reject the whole
-    // package with an error about a line nobody wrote.
-    expect(connectMatchFor(new URL('http://localhost:5173'))).toBeNull()
-    expect(connectMatchFor(new URL('http://127.0.0.1:8000'))).toBeNull()
-    expect(connectMatchFor(new URL('https://mycelium.test'))).toBe('https://mycelium.test/*')
-  })
 })
 
 describe('the manifest', () => {
@@ -70,16 +60,40 @@ describe('the manifest', () => {
       'contextMenus',
       'activeTab',
       'scripting',
+      // The net under the connect wait. Chrome shuts an idle service
+      // worker down, so the fast poll chain cannot be the only thing
+      // waiting for somebody to approve.
+      'alarms',
     ])
     expect(JSON.stringify(manifest)).not.toContain('<all_urls>')
     expect(manifest.permissions).not.toContain('tabs')
-    expect(manifest.permissions).not.toContain('alarms')
     expect(manifest.permissions).not.toContain('unlimitedStorage')
   })
 
-  it('lets exactly one origin hand it a credential, and it is the app', () => {
-    expect(manifest.externally_connectable).toEqual({ matches: ['https://mycelium.test/*'] })
+  it('lets nothing outside the browser send it a message', () => {
+    // ``externally_connectable`` is ABSENT, and its absence is the whole
+    // point: it was a standing right for a web origin to message this
+    // extension, held permanently to save a few seconds of a ceremony
+    // performed once. The extension asks for its credential now, so
+    // nothing needs to be able to talk to it and nothing may.
+    expect(manifest).not.toHaveProperty('externally_connectable')
     expect(manifest.host_permissions).toEqual(['https://mycelium.test/*'])
+  })
+
+  it('is buildable against a development server, which it once was not', () => {
+    // Chrome refuses an ``externally_connectable`` pattern for a host
+    // with no second-level domain, so while the credential arrived that
+    // way a localhost package could not connect at all -- a documented
+    // limitation for the life of that mechanism. Nothing in the manifest
+    // is host-shaped any more except the permission it fetches through.
+    const dev = manifestFor({
+      baseUrl: 'http://localhost:5173',
+      hostPermission: 'http://localhost:5173/*',
+      version: '2.3.9',
+      versionName: 'v2.3.9-1-gabc',
+    })
+    expect(dev).not.toHaveProperty('externally_connectable')
+    expect(dev.host_permissions).toEqual(['http://localhost:5173/*'])
   })
 
   it('declares no content script at all', () => {

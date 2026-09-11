@@ -47,6 +47,7 @@ class FakeArea {
 
 export interface Recorded {
   tabs: { url: string; active?: boolean }[]
+  alarms: { name: string; periodInMinutes: number }[]
   menus: string[]
   fetches: { url: string; init: RequestInit | undefined }[]
 }
@@ -65,7 +66,7 @@ export interface FakeChrome {
 export function installFakeChrome(): FakeChrome {
   const local = new FakeArea()
   const session = new FakeArea()
-  const recorded: Recorded = { tabs: [], menus: [], fetches: [] }
+  const recorded: Recorded = { tabs: [], menus: [], fetches: [], alarms: [] }
 
   let externalListener:
     | ((message: unknown, sender: { origin?: string }, respond: (r: unknown) => void) => boolean)
@@ -129,6 +130,20 @@ export function installFakeChrome(): FakeChrome {
       onClicked: { addListener: () => {} },
     },
     sidePanel: { open: async () => {} },
+    alarms: {
+      // Recorded rather than driven by a clock: what a test needs to
+      // assert is that the net UNDER the fast poll chain was armed and
+      // later cleared, not that Chrome's scheduler fires. Firing is
+      // exercised by calling the poll directly.
+      create: async (name: string, info: { periodInMinutes: number }) => {
+        recorded.alarms.push({ name, ...info })
+      },
+      clear: async (name: string) => {
+        recorded.alarms = recorded.alarms.filter((a) => a.name !== name)
+        return true
+      },
+      onAlarm: { addListener: () => {} },
+    },
     commands: { onCommand: { addListener: () => {} } },
     omnibox: {
       setDefaultSuggestion: () => {},

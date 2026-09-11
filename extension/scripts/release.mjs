@@ -1,9 +1,9 @@
 // What a deployment publishes about the package it serves.
 //
 // The zip alone is not enough to offer as a download. The origin is
-// COMPILED INTO the package -- `host_permissions` and
-// `externally_connectable` are static manifest declarations, so a package
-// cannot be re-pointed at another deployment after the fact -- and a page
+// COMPILED INTO the package -- `host_permissions` is a static manifest
+// declaration, so a package cannot be re-pointed at another deployment
+// after the fact -- and a page
 // that offered any zip it happened to find would hand a visitor of one
 // deployment an extension that talks to a different one. So the archive
 // travels with the origin it was built against, and the page compares

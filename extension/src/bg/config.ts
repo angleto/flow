@@ -1,25 +1,17 @@
 // The deployment this package was compiled against, frozen at build time.
 //
-// Not configurable at run time, and that is the point: the origin here,
-// the host permission in the manifest and the origin allowed to hand over
-// a credential are all derived from ONE build variable, so a package
-// cannot be permitted to reach one deployment while its code talks to
-// another. An options field would reintroduce exactly that gap.
+// Not configurable at run time, and that is the point: the origin here and
+// the host permission in the manifest are derived from ONE build variable,
+// so a package cannot be permitted to reach one deployment while its code
+// talks to another. An options field would reintroduce exactly that gap.
 
 declare const __MYC_ORIGIN__: string
 declare const __MYC_VERSION_NAME__: string
-declare const __MYC_CAN_CONNECT__: boolean
 
 function build(): Readonly<{
   origin: string
   apiUrl: string
   versionName: string
-  /** False for a build against a development server. Chrome refuses an
-   *  externally_connectable pattern whose host has no second-level
-   *  domain, so such a package cannot receive the credential handover --
-   *  a platform rule, and the panel says so instead of offering a button
-   *  that can never work. */
-  canConnect: boolean
 }> {
   const origin = __MYC_ORIGIN__
   if (!origin || !/^https?:\/\/[^/]+$/.test(origin)) {
@@ -31,7 +23,6 @@ function build(): Readonly<{
     origin,
     apiUrl: `${origin}/api`,
     versionName: __MYC_VERSION_NAME__,
-    canConnect: __MYC_CAN_CONNECT__,
   })
 }
 

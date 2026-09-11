@@ -14,7 +14,6 @@ export default defineConfig({
     __MYC_ORIGIN__: JSON.stringify(env.baseUrl),
     __MYC_VERSION_NAME__: JSON.stringify(env.versionName),
     // The panel needs to know it cannot connect BEFORE offering to.
-    __MYC_CAN_CONNECT__: JSON.stringify(env.connectMatch !== null),
   },
   resolve: {
     alias: {
