@@ -251,6 +251,26 @@ ROUTE_SCOPES: dict[tuple[str, str], object] = {
     ("POST", "/auth/login"): PUBLIC,
     ("POST", "/auth/login-mfa"): PUBLIC,
     ("POST", "/auth/logout"): HUMAN_ONLY,
+    # --- the device authorization grant ---
+    # The two halves of the flow sit on opposite sides of the fence, and
+    # that is the design rather than an accident of who calls what.
+    #
+    # PUBLIC, because the caller is a device that holds nothing yet.
+    # Neither route yields anything on its own: ``authorize`` opens a
+    # request that grants nothing until a person answers it, and ``token``
+    # says "still waiting" until one has. Both are rate-limited on network
+    # origin and neither confirms the existence of anything to a caller
+    # without the right code.
+    ("POST", "/auth/device/authorize"): PUBLIC,
+    ("POST", "/auth/device/token"): PUBLIC,
+    # HUMAN_ONLY, because answering one of those requests MINTS A
+    # CREDENTIAL. A scoped credential that could approve a device could
+    # ask for a device credential of its own and collect it, which is a
+    # laundering step out of its own scope -- the same reason the
+    # assistant and agent-token routes are fenced off above.
+    ("GET", "/auth/device/pending"): HUMAN_ONLY,
+    ("POST", "/auth/device/approve"): HUMAN_ONLY,
+    ("POST", "/auth/device/deny"): HUMAN_ONLY,
     ("GET", "/agent/self"): META,
     # Same reason as /agent/self, one question earlier: a credential that
     # may act in several workspaces cannot name one until it knows which

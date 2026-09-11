@@ -4010,3 +4010,67 @@ class SearchClickIn(BaseModel):
     rank: int = Field(ge=1)
     result_count: int = Field(ge=1)
     is_probe: bool = False
+
+
+# --- Device authorization grant (browser extension, and any later
+# --- surface that cannot be handed a secret through a web page).
+
+
+class DeviceAuthorizeIn(BaseModel):
+    """Opened by a device with no session. ``client`` names which of our
+    own surfaces is asking, so the approval screen can say what it is
+    approving rather than "a device"."""
+
+    client: str = Field(min_length=1, max_length=32)
+
+
+class DeviceAuthorizeOut(BaseModel):
+    """Two codes doing two jobs. ``device_code`` is the only one that
+    collects anything and is returned exactly once; ``user_code`` is the
+    one a person compares against the screen in front of them, and it is
+    not a secret.
+
+    ``verification_path`` is a PATH, not a URL: the device knows which
+    deployment it is talking to, and returning an absolute address would
+    let this response redirect it somewhere else."""
+
+    device_code: str
+    user_code: str
+    verification_path: str
+    expires_at: datetime.datetime
+    interval: int
+
+
+class DeviceTokenIn(BaseModel):
+    device_code: str = Field(min_length=16, max_length=512)
+
+
+class DeviceTokenOut(BaseModel):
+    """What the device collects. ``secret`` exists from this moment and
+    not before: it is minted in the transaction that answers this call,
+    so a request nobody collects leaves no credential behind."""
+
+    secret: str
+    assistant_id: uuid.UUID
+    workspace_id: uuid.UUID
+    workspace_name: str
+    scope: list[str]
+    expires_at: datetime.datetime | None
+
+
+class DevicePendingOut(BaseModel):
+    """What the person is being asked to approve. Everything here is
+    read by a human deciding, which is why it carries the code to
+    COMPARE, when the request was opened and from where, and the exact
+    grant in the server's own words rather than the client's."""
+
+    user_code: str
+    client: str
+    opened_at: datetime.datetime
+    expires_at: datetime.datetime
+    origin_ip: str | None
+    scope: list[str]
+
+
+class DeviceAnswerIn(BaseModel):
+    user_code: str = Field(min_length=1, max_length=32)

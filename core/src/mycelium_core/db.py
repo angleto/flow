@@ -17,6 +17,7 @@ import asyncio
 import logging
 import random
 import ssl
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
@@ -595,4 +596,60 @@ async def with_actor(
                 "       set_config('app.current_actor_subject', :asubj, true)"
             ),
             {"ak": saved_kind, "asubj": saved_subj},
+        )
+
+
+@asynccontextmanager
+async def as_tenant(
+    session: AsyncSession,
+    *,
+    org_id: str | uuid.UUID,
+    user_id: str | uuid.UUID,
+) -> AsyncIterator[None]:
+    """Temporarily act as a tenant inside an already-open session.
+
+    Sibling of ``with_actor`` next door, and the same mechanism: the
+    GUCs are ``set_config(..., is_local => true)``, so this narrows a
+    window inside one transaction and leaks across nothing.
+
+    Use case, and the reason it is not merely a convenience: the device
+    authorization grant's collection step runs on an UNAUTHENTICATED
+    request. A device polling with its own code carries no session, so
+    the request has no tenant of its own, yet what it collects must be
+    minted as the person who approved it, in the workspace they approved
+    it in. The alternative shapes are both worse. Opening a second,
+    tenant-scoped session would put the claim and the mint in different
+    transactions, and the whole point of that pair is that a failure in
+    the mint rolls the claim back. Relaxing the row-level policy on
+    ``ai_assistants`` so an untenanted insert could pass would trade a
+    narrow window for a standing hole.
+
+    The caller is responsible for having established, from stored state
+    rather than from the request, WHICH tenant this is: here, the
+    approver recorded on the row when they answered.
+    """
+    saved = (
+        await session.execute(
+            text(
+                "SELECT current_setting('app.current_org', true),"
+                "       current_setting('app.current_user', true)"
+            )
+        )
+    ).one()
+    await session.execute(
+        text(
+            "SELECT set_config('app.current_org', :org, true),"
+            "       set_config('app.current_user', :usr, true)"
+        ),
+        {"org": str(org_id), "usr": str(user_id)},
+    )
+    try:
+        yield
+    finally:
+        await session.execute(
+            text(
+                "SELECT set_config('app.current_org', :org, true),"
+                "       set_config('app.current_user', :usr, true)"
+            ),
+            {"org": saved[0] or "", "usr": saved[1] or ""},
         )

@@ -425,8 +425,43 @@ SELF_SERVICE_SCOPES: frozenset[str] = frozenset(
 )
 
 
+# What the browser extension asks for, and nothing beyond it.
+#
+# A SUBSET of SELF_SERVICE_SCOPES, never an alias for it, and the two are
+# different questions: that one is a policy ceiling ("what may a member
+# grant themselves"), this one is a request ("what does this surface
+# use"). Aliased, the extension would silently widen every time the
+# ceiling did. The subset relation is asserted in
+# core/tests/test_extension_scopes.py rather than assumed here.
+#
+# Two keys are deliberately ABSENT and the absence is the design:
+# ``workflows:write`` would let it delete the state machine every task in
+# the workspace runs on (advancing one task is ``tasks:state``), and
+# ``tags:write`` would let it invent, rename and rescope the taxonomy
+# (filing into a client or project that already exists is ``tags:assign``).
+EXTENSION_SCOPES: tuple[str, ...] = (
+    "tasks:read",
+    "tasks:write",
+    "tasks:state",
+    "notes:read",
+    "notes:write",
+    "tags:read",
+    "tags:assign",
+    "workflows:read",
+    "search:read",
+    "search:write",
+    "attachments:write",
+)
+
+# What a credential minted for the extension carries, so the app can list
+# "connected browsers" without guessing which rows are which.
+EXTENSION_PROVIDER = "mycelium-extension"
+
+
 __all__ = [
     "DEFAULT_SCOPES",
+    "EXTENSION_PROVIDER",
+    "EXTENSION_SCOPES",
     "SCOPE_CATALOG",
     "SELF_SERVICE_SCOPES",
     "VALID_SCOPE_KEYS",

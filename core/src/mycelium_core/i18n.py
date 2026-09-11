@@ -39,6 +39,10 @@ class MessageCode(enum.StrEnum):
     AUTH_RESET_TOKEN_INVALID = "auth.reset_token_invalid"  # noqa: S105 (code, not a secret)
     AUTH_VERIFICATION_TOKEN_INVALID = "auth.verification_token_invalid"  # noqa: S105 (code, not a secret)
     AUTH_SIGNUP_DISABLED = "auth.signup_disabled"
+    AUTH_DEVICE_CODE_INVALID = "auth.device_code_invalid"
+    AUTH_DEVICE_PENDING = "auth.device_pending"
+    AUTH_DEVICE_EXPIRED = "auth.device_expired"
+    AUTH_DEVICE_DENIED = "auth.device_denied"
     RBAC_NO_MEMBERSHIP = "rbac.no_membership"
     RBAC_ROLE_INSUFFICIENT = "rbac.role_insufficient"
     MEMBER_NOT_FOUND = "member.not_found"
@@ -318,6 +322,10 @@ _CATALOG: dict[str, dict[MessageCode, str]] = {
         MessageCode.AUTH_RESET_TOKEN_INVALID: "Invalid or expired reset token",
         MessageCode.AUTH_VERIFICATION_TOKEN_INVALID: "Invalid or expired token",
         MessageCode.AUTH_SIGNUP_DISABLED: "Public sign-up is disabled on this instance",
+        MessageCode.AUTH_DEVICE_CODE_INVALID: "No such device request",
+        MessageCode.AUTH_DEVICE_PENDING: "Waiting for approval",
+        MessageCode.AUTH_DEVICE_EXPIRED: "The request expired before it was approved",
+        MessageCode.AUTH_DEVICE_DENIED: "The request was refused",
         MessageCode.RBAC_NO_MEMBERSHIP: "Not a member of this workspace",
         MessageCode.RBAC_ROLE_INSUFFICIENT: (
             "Role {current} is insufficient, requires >= {minimum}"

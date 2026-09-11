@@ -44,6 +44,11 @@ class AssistantWithSecret:
     assistant: AiAssistant
     raw_secret: str
     token_prefix: str
+    # When the credential stops working, read from the token that was
+    # just minted rather than recomputed from a TTL by each caller. A
+    # surface that has to tell its holder "this needs renewing" cannot
+    # get that from the assistant row, which has no expiry of its own.
+    token_expires_at: datetime | None = None
 
 
 def _validate_scope(scope: Sequence[str]) -> list[str]:
@@ -132,6 +137,7 @@ async def create_assistant(
     notes: str | None = None,
     runtime: AssistantRuntime = AssistantRuntime.external,
     workspace_binding: WorkspaceBinding = WorkspaceBinding.workspace,
+    token_ttl_days: int | None = agent_tokens.DEFAULT_TTL_DAYS,
 ) -> AssistantWithSecret:
     """Create an assistant + its first agent_token in one atomic flush.
     ``raw_secret`` returned exactly once; the operator pastes it into
@@ -184,6 +190,11 @@ async def create_assistant(
         name=label,
         assistant_id=row.id,
         workspace_binding=workspace_binding,
+        # How long the secret lives. Defaulted to the same 365 days every
+        # caller got before this was a parameter; the browser extension
+        # passes less, because its secret sits in a browser profile on a
+        # machine that may be shared and renewing it is two clicks.
+        ttl_days=token_ttl_days,
         # Already checked, above, against what this credential may do.
         # Passing it again here would let the two thresholds disagree.
         minimum_role=Role.member if _is_self_service(eff_scope) else Role.owner,
@@ -197,7 +208,12 @@ async def create_assistant(
         action="create",
         diff={"label": label, "scope": eff_scope},
     )
-    return AssistantWithSecret(assistant=row, raw_secret=mint.raw, token_prefix=mint.token.prefix)
+    return AssistantWithSecret(
+        assistant=row,
+        raw_secret=mint.raw,
+        token_prefix=mint.token.prefix,
+        token_expires_at=mint.token.expires_at,
+    )
 
 
 async def list_assistants(

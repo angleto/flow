@@ -34,6 +34,7 @@ from mycelium_api.routers import (
     capabilities,
     connector_webhooks,
     dependencies,
+    device,
     dispatch,
     email,
     embedder_provider,
@@ -358,6 +359,11 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(auth.router)
+    # The device authorization grant, how a browser extension
+    # connects. Its own module rather than more of auth.py: two
+    # of its five routes are unauthenticated on purpose, and that
+    # is worth being able to see in one file.
+    app.include_router(device.router)
     app.include_router(admin_users.router)
     app.include_router(admin_sdi.router)
     app.include_router(mfa.router)

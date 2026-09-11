@@ -55,6 +55,7 @@ from mycelium_core.models.classification_personal_prior_snapshot import (
 )
 from mycelium_core.models.client_profile import ClientProfile
 from mycelium_core.models.dependency import DependencyType, TaskDependency
+from mycelium_core.models.device_authorization import DeviceAuthorization
 from mycelium_core.models.dispatch_request import (
     ACTIVE_DISPATCH_STATUSES,
     DEFAULT_AUTONOMOUS_DISPATCH,
@@ -222,6 +223,7 @@ __all__ = [
     "CreditLedger",
     "DefaultRateCard",
     "DependencyType",
+    "DeviceAuthorization",
     "DispatchRequest",
     "DispatchStatus",
     "DocumentType",
