@@ -41,7 +41,12 @@ from mcp.server.fastmcp import FastMCP
 
 from mycelium_core import __version__
 from mycelium_core.db import tenant_session
-from mycelium_core.embedder import embed_batch, embedder_available, get_embedder
+from mycelium_core.embedder import (
+    EmbedSide,
+    embed_batch,
+    embedder_available,
+    get_embedder,
+)
 from mycelium_core.errors import DomainError, jsonable_params
 from mycelium_core.i18n import MessageCode
 from mycelium_core.models.billing import CostBasis
@@ -316,7 +321,7 @@ async def _ensure_index() -> None:
             # Python+tokenizer overhead dominated the previous sequential
             # loop and the first ``search_tools`` paid all of it inline,
             # making the request appear hung to the MCP client.
-            results = await embed_batch(emb, [m["text"] for m in cat])
+            results = await embed_batch(emb, [m["text"] for m in cat], side=EmbedSide.document)
             _index = {m["name"]: _normalize(r.vector) for m, r in zip(cat, results, strict=True)}
 
 
@@ -434,7 +439,7 @@ async def search_tools(
     if embedder_available():
         await _ensure_index()
         index = _index or {}
-        qv = _normalize((await get_embedder().embed(query)).vector)
+        qv = _normalize((await get_embedder().embed(query, side=EmbedSide.query)).vector)
         scored = [
             (_cosine(qv, index[n]) - _domain_penalty(domain, cat[n]["domain"]), n)
             for n in names

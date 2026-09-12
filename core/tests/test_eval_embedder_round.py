@@ -15,12 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from mycelium_core.embedder import EmbedResult
 from mycelium_core.services import eval_public_bench as bench
+from mycelium_core.services.eval_baselines import PairedStat, paired_stats
 from mycelium_core.services.eval_embedder_round import (
     CandidateOutcome,
     EmbedderCandidate,
-    PrefixedEmbedder,
     load_round_spec,
     render_round,
     system_run,
@@ -30,25 +29,22 @@ from mycelium_core.services.eval_embedder_round import (
 QUERY_PREFIX = "Instruct: Given a web search query, retrieve relevant passages\nQuery:"
 
 
-class RecordingEmbedder:
-    """Records what it was asked to embed, which is the only thing the
-    prefix wrapper is responsible for."""
-
-    def __init__(self) -> None:
-        self.seen: list[str] = []
-
-    async def embed(self, text: str) -> EmbedResult:
-        self.seen.append(text)
-        return EmbedResult(vector=[1.0, 0.0], model_id="recording/model", tokens=1)
-
-
-def _score(instance_id: str, *, ranks: dict[str, int | None]) -> bench.InstanceScore:
+def _score(
+    instance_id: str,
+    *,
+    ranks: dict[str, int | None],
+    categories: dict[str, str] | None = None,
+) -> bench.InstanceScore:
+    """``categories`` overrides the label per question; everything unnamed is
+    ``single-hop``, the category the promotion rule is pre-registered on, so a
+    test that does not care about categories still exercises the whole rule."""
+    cats = categories or {}
     return bench.InstanceScore(
         instance_id=instance_id,
         results=tuple(
             bench.QuestionResult(
                 qid=qid,
-                category="single-hop",
+                category=cats.get(qid, "single-hop"),
                 abstention=False,
                 rank=rank,
                 abstain_correct=None,
@@ -65,13 +61,14 @@ def _outcome(
     scores: list[bench.InstanceScore],
     *,
     native_dim: int | None = 1024,
-    prefix: str = "",
+    query_prompt: str | None = None,
 ) -> CandidateOutcome:
     return CandidateOutcome(
-        candidate=EmbedderCandidate(model=f"vendor/{label}", label=label, query_prefix=prefix),
+        candidate=EmbedderCandidate(model=f"vendor/{label}", label=label),
         report=bench.aggregate("locomo", 10, scores, ["vendor/" + label]),
         scores=tuple(scores),
         native_dim=native_dim,
+        query_prompt=query_prompt,
     )
 
 
@@ -93,7 +90,7 @@ def test_a_spec_round_trips(tmp_path: Path) -> None:
                 "notes": "perche' questi candidati",
                 "candidates": [
                     {"label": "bge-m3", "model": "BAAI/bge-m3"},
-                    {"label": "q", "model": "Qwen/x", "query_prefix": QUERY_PREFIX},
+                    {"label": "q", "model": "Qwen/x", "mrl": True, "revision": "abc123"},
                 ],
             },
         )
@@ -102,17 +99,15 @@ def test_a_spec_round_trips(tmp_path: Path) -> None:
     assert spec.notes.startswith("perche'")
     assert [c.name for c in spec.candidates] == ["bge-m3", "q"]
     assert spec.baseline_candidate().model == "BAAI/bge-m3"
+    assert spec.candidates[1].mrl and spec.candidates[1].revision == "abc123"
 
 
-def test_a_misspelled_prefix_key_is_refused_not_ignored(tmp_path: Path) -> None:
-    """The whole point of the round: a candidate silently running WITHOUT
-    its instruction prefix is the bug being corrected, so a typo in the key
-    must stop the run rather than produce a plausible number."""
-    path = _write(
-        tmp_path,
-        {"candidates": [{"model": "Qwen/x", "querry_prefix": QUERY_PREFIX}]},
-    )
-    with pytest.raises(ValueError, match="querry_prefix"):
+def test_a_misspelled_key_is_refused_not_ignored(tmp_path: Path) -> None:
+    """A spec key that is silently dropped is how a round measures something
+    other than what its author wrote down: ``revsion`` would pin nothing and
+    still produce a plausible table."""
+    path = _write(tmp_path, {"candidates": [{"model": "Qwen/x", "revsion": "abc123"}]})
+    with pytest.raises(ValueError, match="revsion"):
         load_round_spec(path)
 
 
@@ -134,71 +129,134 @@ def test_the_first_candidate_is_the_default_baseline(tmp_path: Path) -> None:
     assert spec.baseline == "a"
 
 
-# --- the prefix wrapper -----------------------------------------------------
+# --- what a spec may say ----------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_the_prefix_is_prepended_verbatim() -> None:
-    inner = RecordingEmbedder()
-    await PrefixedEmbedder(inner=inner, prefix=QUERY_PREFIX).embed("dove sta il reranker")
-    assert inner.seen == [f"{QUERY_PREFIX}dove sta il reranker"]
+def test_a_retired_prefix_key_stops_the_round(tmp_path: Path) -> None:
+    """``query_prefix`` was where the instruction used to be declared, before
+    the checkpoint became the source. A spec still carrying one was written
+    against the old shape, and ignoring the key would run that candidate with
+    whatever prefix its config happens to declare while its author believed
+    they had chosen one. Loud, and early: the loader is the only place that
+    still knows the key ever existed."""
+    with pytest.raises(ValueError, match="query_prefix"):
+        load_round_spec(
+            _write(tmp_path, {"candidates": [{"model": "Qwen/x", "query_prefix": "Instruct:"}]})
+        )
 
 
-@pytest.mark.asyncio
-async def test_an_empty_prefix_leaves_the_text_untouched() -> None:
-    """The document side of a symmetric model must not be perturbed."""
-    inner = RecordingEmbedder()
-    await PrefixedEmbedder(inner=inner, prefix="").embed("un documento")
-    assert inner.seen == ["un documento"]
-
-
-@pytest.mark.asyncio
-async def test_batching_prefixes_every_text() -> None:
-    inner = RecordingEmbedder()
-    out = await PrefixedEmbedder(inner=inner, prefix="p:").embed_batch(["a", "b"])
-    assert inner.seen == ["p:a", "p:b"]
-    assert len(out) == 2
-
-
-@pytest.mark.asyncio
-async def test_model_id_passes_through_so_the_vector_space_matches() -> None:
-    """``SemanticDenseStage`` filters on ``model_id``: if the wrapper
-    reported its own, a run's queries would never match its own corpus."""
-    res = await PrefixedEmbedder(inner=RecordingEmbedder(), prefix="p:").embed("x")
-    assert res.model_id == "recording/model"
-
-
-def test_only_a_one_sided_prefix_counts_as_asymmetric() -> None:
-    assert EmbedderCandidate(model="m", query_prefix="q:").asymmetric
-    assert not EmbedderCandidate(model="m").asymmetric
-    assert not EmbedderCandidate(model="m", query_prefix="p", document_prefix="p").asymmetric
+def test_the_mrl_claim_must_be_a_boolean(tmp_path: Path) -> None:
+    """A string would be truthy whatever it said, including "false", and the
+    candidate would run truncated on a claim nobody made."""
+    with pytest.raises(ValueError, match="mrl"):
+        load_round_spec(_write(tmp_path, {"candidates": [{"model": "Qwen/x", "mrl": "yes"}]}))
 
 
 # --- the pre-registered rule ------------------------------------------------
+#
+# Three clauses, checked in order: July's (recall AND MRR both up), then the
+# category the round is about, then significance. The tests below drive the
+# rule through the REAL path -- two runs of per-question records, paired by
+# ``paired_stats`` -- rather than through a hand-built statistic, because the
+# clause that is easiest to get wrong is the one that depends on how the
+# pairs are counted.
 
 
-def test_promotion_needs_both_recall_and_mrr() -> None:
-    base = bench.aggregate("locomo", 10, [_score("i1", ranks={"q1": 2, "q2": None})], ["base"])
-    better = bench.aggregate("locomo", 10, [_score("i1", ranks={"q1": 1, "q2": 3})], ["cand"])
-    v = verdict(base, better, label="cand")
-    assert v.promote and v.d_recall > 0 and v.d_mrr > 0
+def _stat(
+    base_ranks: dict[str, int | None],
+    cand_ranks: dict[str, int | None],
+    *,
+    categories: dict[str, str] | None = None,
+) -> PairedStat:
+    runs = [
+        system_run(_outcome(name, [_score("i1", ranks=ranks, categories=categories)]))
+        for name, ranks in (("base", base_ranks), ("cand", cand_ranks))
+    ]
+    return {s.system: s for s in paired_stats(runs, base_system="base")}["cand"]
+
+
+#: Seven questions the incumbent misses and the candidate finds, with none
+#: the other way: exact McNemar puts that at p=0.0156, just under the
+#: Bonferroni threshold for three candidates (0.05/3 = 0.0167). Seven rather
+#: than a round ten because the boundary is where a rule is worth testing.
+_SEVEN_WINS_BASE: dict[str, int | None] = {f"q{i}": None for i in range(7)}
+_SEVEN_WINS_CAND: dict[str, int | None] = {f"q{i}": 1 for i in range(7)}
+
+
+def test_a_significant_improvement_in_the_registered_category_promotes() -> None:
+    v = verdict(_stat(_SEVEN_WINS_BASE, _SEVEN_WINS_CAND), label="cand", n_comparisons=3)
+    assert v.promote
+    assert v.d_recall > 0 and v.d_mrr > 0
+    assert v.mcnemar_p < v.alpha
+    assert v.d_recall_category is not None and v.d_recall_category > 0
 
 
 def test_a_candidate_that_only_reorders_is_not_promoted() -> None:
-    """Recall flat, MRR up: the reranker's signature, and by the July rule
-    not a reason to swap the embedder."""
-    base = bench.aggregate("locomo", 10, [_score("i1", ranks={"q1": 3, "q2": 4})], ["base"])
-    reordered = bench.aggregate("locomo", 10, [_score("i1", ranks={"q1": 1, "q2": 2})], ["cand"])
-    v = verdict(base, reordered, label="cand")
+    """Recall flat, MRR up: the reranker's signature, and not a reason to
+    swap the embedder. This clause is July's, unchanged."""
+    v = verdict(
+        _stat({"q1": 3, "q2": 4}, {"q1": 1, "q2": 2}),
+        label="cand",
+        n_comparisons=3,
+    )
     assert not v.promote
     assert v.d_recall == 0 and v.d_mrr > 0
     assert "recall" in v.reason
 
 
 def test_a_strictly_worse_candidate_names_both() -> None:
-    base = bench.aggregate("locomo", 10, [_score("i1", ranks={"q1": 1, "q2": 2})], ["base"])
-    worse = bench.aggregate("locomo", 10, [_score("i1", ranks={"q1": None, "q2": None})], ["cand"])
-    assert verdict(base, worse, label="cand").reason == "neither improved"
+    v = verdict(_stat({"q1": 1, "q2": 2}, {"q1": None, "q2": None}), label="cand", n_comparisons=3)
+    assert v.reason == "neither improved"
+
+
+def test_an_improvement_inside_the_noise_is_not_promoted() -> None:
+    """The clause July did not have. Five wins and no losses is a clean
+    direction and a 0.0625 p: by the old rule this promotes, and promotion
+    means re-embedding the corpus."""
+    base: dict[str, int | None] = {f"q{i}": None for i in range(5)}
+    cand: dict[str, int | None] = {f"q{i}": 1 for i in range(5)}
+    v = verdict(_stat(base, cand), label="cand", n_comparisons=3)
+    assert not v.promote
+    assert v.d_recall > 0 and v.d_mrr > 0  # July's clause is satisfied
+    assert "noise" in v.reason and "McNemar" in v.reason
+
+
+def test_the_threshold_follows_the_number_of_comparisons() -> None:
+    """Bonferroni is a property of the ROUND, not of the candidate: the same
+    evidence is enough when it is the only comparison and not enough when it
+    is one of five. A threshold frozen at three candidates would stop being
+    the one that was pre-registered as soon as a fourth was added."""
+    base: dict[str, int | None] = {f"q{i}": None for i in range(6)}
+    cand: dict[str, int | None] = {f"q{i}": 1 for i in range(6)}  # p = 0.031
+    assert verdict(_stat(base, cand), label="cand", n_comparisons=1).promote
+    assert not verdict(_stat(base, cand), label="cand", n_comparisons=5).promote
+
+
+def test_a_gain_outside_the_registered_category_does_not_promote() -> None:
+    """The round is about single-hop: July already attributed the multi-hop
+    gap to the graph rather than to the embedder. A candidate that wins
+    everything EXCEPT single-hop is evidence about something this round
+    cannot act on, and the pooled row alone would have called it a win."""
+    base: dict[str, int | None] = {f"q{i}": None for i in range(7)}
+    cand: dict[str, int | None] = {f"q{i}": 1 for i in range(7)}
+    base["s1"], cand["s1"] = 1, None  # the one single-hop question, lost
+    cats = {f"q{i}": "multi-hop" for i in range(7)} | {"s1": "single-hop"}
+    v = verdict(_stat(base, cand, categories=cats), label="cand", n_comparisons=3)
+    assert not v.promote
+    assert v.d_recall > 0 and "single-hop" in v.reason
+    assert v.d_recall_category is not None and v.d_recall_category < 0
+
+
+def test_a_dataset_without_the_category_cannot_satisfy_the_rule() -> None:
+    """LongMemEval does not carry LOCOMO's labels. The rule is then not
+    evaluable, which must read as "not evaluable" and never as a pass."""
+    base: dict[str, int | None] = {f"q{i}": None for i in range(7)}
+    cand: dict[str, int | None] = {f"q{i}": 1 for i in range(7)}
+    cats = {f"q{i}": "temporal" for i in range(7)}
+    v = verdict(_stat(base, cand, categories=cats), label="cand", n_comparisons=3)
+    assert not v.promote
+    assert v.d_recall_category is None
+    assert "not evaluable" in v.reason
 
 
 # --- the paired shape -------------------------------------------------------
@@ -223,12 +281,15 @@ def test_the_bootstrap_clusters_on_the_instance() -> None:
 
 
 def test_the_round_renders_every_candidate_with_its_verdict() -> None:
-    scores_base = [_score("i1", ranks={"q1": 3, "q2": None})]
-    scores_cand = [_score("i1", ranks={"q1": 1, "q2": 2})]
+    # Seven clean wins: enough evidence to reach PROMOTE with one candidate
+    # under the Bonferroni threshold, so the rendered table exercises both
+    # marks rather than only the refusal.
+    scores_base = [_score("i1", ranks=_SEVEN_WINS_BASE)]
+    scores_cand = [_score("i1", ranks=_SEVEN_WINS_CAND)]
     out = render_round(
         [
             _outcome("bge-m3", scores_base),
-            _outcome("qwen3-emb-8B", scores_cand, native_dim=4096, prefix=QUERY_PREFIX),
+            _outcome("qwen3-emb-8B", scores_cand, native_dim=4096, query_prompt=QUERY_PREFIX),
         ],
         baseline="bge-m3",
     )
@@ -238,6 +299,10 @@ def test_the_round_renders_every_candidate_with_its_verdict() -> None:
     assert "4096" in out  # ran truncated
     assert "query" in out  # embedded asymmetrically
     assert "McNemar" in out
+    # The rule the reader is being asked to trust, and the per-category
+    # delta it turns on, both stated next to the verdict they produced.
+    assert "Bonferroni" in out
+    assert "single-hop" in out
 
 
 def test_rendering_refuses_a_baseline_that_did_not_run() -> None:

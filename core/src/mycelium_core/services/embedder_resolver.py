@@ -10,7 +10,7 @@ LOCAL tier is always-on (``embedder.get_embedder()`` -> bge-m3, the
 - ``scaleway`` with the org's OWN Fernet key -> ``(HostedEmbedder, byok)``;
 - ``scaleway`` on OUR key (``settings.scaleway_api_key``) -> ``(..., our_key)``.
 
-Every hosted embedder MUST emit ``settings.embed_dim_hosted`` (4000); the
+Every hosted embedder MUST emit ``embed_dims.EMBED_DIM_HOSTED``; the
 fail-closed probe in ``set_org_embedder_provider`` rejects a key/model
 that can't, so a bad config is never stored active.
 """
@@ -24,7 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mycelium_core.config import get_settings
 from mycelium_core.crypto import decrypt_secret, encrypt_secret
-from mycelium_core.embedder import Embedder, HostedEmbedder, get_hosted_embedder_override
+from mycelium_core.embed_dims import EMBED_DIM_HOSTED
+from mycelium_core.embedder import (
+    Embedder,
+    EmbedSide,
+    HostedEmbedder,
+    get_hosted_embedder_override,
+)
 from mycelium_core.errors import DomainError
 from mycelium_core.i18n import MessageCode
 from mycelium_core.models.billing import CostBasis
@@ -57,7 +63,7 @@ def _build_scaleway_embedder(
         api_key=key,
         model=model or _DEFAULT_SCALEWAY_EMBED_MODEL,
         base_url=base_url or settings.scaleway_base_url,
-        target_dim=settings.embed_dim_hosted,
+        target_dim=EMBED_DIM_HOSTED,
     )
 
 
@@ -92,12 +98,11 @@ async def _probe_embedder_key(
     and require it to emit exactly the fleet hosted dim, so a key/model
     that can't fill ``embedding_hosted`` is never stored active. Any
     failure raises ``DomainError(PROVIDER_KEY_INVALID)``."""
-    settings = get_settings()
     try:
         if kind == EmbedderProviderKind.scaleway:
             embedder = _build_scaleway_embedder(key=key, model=model, base_url=base_url)
-            res = await embedder.embed("ping")
-            if len(res.vector) != settings.embed_dim_hosted:
+            res = await embedder.embed("ping", side=EmbedSide.document)
+            if len(res.vector) != EMBED_DIM_HOSTED:
                 raise DomainError(MessageCode.PROVIDER_KEY_INVALID)
     except DomainError:
         raise

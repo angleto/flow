@@ -22,7 +22,7 @@ from httpx import ASGITransport, AsyncClient
 
 import mycelium_core.embedder as embedder_mod
 from mycelium_api.main import app
-from mycelium_core.embedder import EmbedResult, set_embedder_override
+from mycelium_core.embedder import EmbedResult, EmbedSide, set_embedder_override
 
 
 class _BrokenEmbedder:
@@ -31,7 +31,7 @@ class _BrokenEmbedder:
 
     model_id = "broken-embed"
 
-    async def embed(self, text: str) -> EmbedResult:
+    async def embed(self, text: str, *, side: EmbedSide) -> EmbedResult:
         raise RuntimeError("LocalEmbedder requires the 'sentence-transformers' extra")
 
 

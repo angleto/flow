@@ -20,7 +20,7 @@ import asyncio
 from sqlalchemy import select
 
 from mycelium_core.db import admin_session, tenant_session
-from mycelium_core.embedder import get_embedder
+from mycelium_core.embedder import EmbedSide, get_embedder
 from mycelium_core.models.membership import Membership, Role
 from mycelium_core.models.memory_blob import MemoryBlob
 from mycelium_core.models.organization import Organization
@@ -115,7 +115,7 @@ async def main() -> None:
         emb = get_embedder()
         for label, q in QUERIES:
             print(f"\n=== {label}: {q!r} ===")
-            qres = await emb.embed(q)
+            qres = await emb.embed(q, side=EmbedSide.query)
             print(f"  query model_id={qres.model_id} dim={len(qres.vector)}")
             dist = MemoryBlob.embedding.max_inner_product(qres.vector)
             rows = (

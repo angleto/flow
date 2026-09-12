@@ -16,8 +16,8 @@ import hashlib
 import math
 import re
 
-from mycelium_core.config import get_settings
-from mycelium_core.embedder import EmbedResult
+from mycelium_core.embed_dims import EMBED_DIM
+from mycelium_core.embedder import EmbedResult, EmbedSide
 
 _TOKEN = re.compile(r"\w+")
 
@@ -28,10 +28,21 @@ def _hash_idx(token: str, dim: int) -> int:
 
 
 class FakeEmbedder:
+    """Deterministic hashed bag-of-tokens, SYMMETRIC in the side.
+
+    Ignoring ``side`` is not a shortcut in the double, it is the contract of
+    the model it stands in for: bge-m3, the incumbent, embeds a query and a
+    document the same way. A fake that returned different vectors per side
+    would break every retrieval test for a reason no production embedder
+    has. What a wrong side costs on an instruction-tuned model is measured
+    in the embedder round, not asserted here.
+    """
+
     model_id = "fake-embed"
 
-    async def embed(self, text: str) -> EmbedResult:
-        dim = get_settings().embed_dim
+    async def embed(self, text: str, *, side: EmbedSide) -> EmbedResult:
+        del side  # symmetric, see the class docstring
+        dim = EMBED_DIM
         vec = [0.0] * dim
         tokens = _TOKEN.findall(text.lower())
         for tok in tokens:

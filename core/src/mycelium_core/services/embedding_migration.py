@@ -35,7 +35,8 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mycelium_core.config import get_settings
-from mycelium_core.embedder import Embedder, embed_batch, get_embedder
+from mycelium_core.embed_dims import EMBED_DIM, EMBED_DIM_HOSTED
+from mycelium_core.embedder import Embedder, EmbedSide, embed_batch, get_embedder
 from mycelium_core.models.memory_blob import MemoryBlob
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,9 @@ async def _backfill_tier(
     # small N). ``embed_batch`` falls back to a sequential loop for embedders
     # without a batch method (e.g. the CI fake / a future hosted provider).
     try:
-        results = await embed_batch(embedder, [txt for _, _, txt in candidates])
+        results = await embed_batch(
+            embedder, [txt for _, _, txt in candidates], side=EmbedSide.document
+        )
     except Exception:
         # Fail LOUD, not silent: a systemic embedder failure (e.g. the model
         # extra missing from this process image) used to be swallowed at
@@ -123,7 +126,7 @@ async def run_embedding_backfill(
     done = await _backfill_tier(
         session,
         embedder=embedder,
-        expected_dim=settings.embed_dim,
+        expected_dim=EMBED_DIM,
         # Missing, or written by a model that is not the active one. The IS NULL
         # arm is kept explicitly rather than folded into the model comparison:
         # a dim rebuild nulls the vector without necessarily clearing model_id,
@@ -152,7 +155,7 @@ async def run_embedding_backfill(
         done += await _backfill_tier(
             session,
             embedder=hosted[0],
-            expected_dim=settings.embed_dim_hosted,
+            expected_dim=EMBED_DIM_HOSTED,
             stale=(
                 MemoryBlob.embedding_hosted.is_(None)
                 if hosted_model is None

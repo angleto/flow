@@ -26,15 +26,17 @@ model at startup off the request path.
 from __future__ import annotations
 
 import asyncio
+import enum
 import importlib.util
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast, runtime_checkable
 
 import httpx
 
 from mycelium_core.config import get_settings
+from mycelium_core.embed_dims import EMBED_DIM
 
 
 @dataclass(frozen=True)
@@ -44,9 +46,29 @@ class EmbedResult:
     tokens: int  # billable units for metering (ADR-0019)
 
 
+class EmbedSide(enum.StrEnum):
+    """Which half of a retrieval pair a text is being embedded as.
+
+    A whole class of retrieval models -- every instruction-tuned one, which
+    is most of what has been published since 2025 -- is trained with an
+    instruction prefix on the QUERY and nothing on the document. Embedding
+    both sides identically does not fail: it returns vectors of the right
+    shape from a model running outside the configuration it was trained
+    for, and costs a few points of recall silently. So the side is not an
+    optimisation the embedder may ignore, it is part of asking the
+    question, and it has no default: a call site that has not decided which
+    side it is on has a bug that only a benchmark would ever reveal.
+
+    A symmetric model (bge-m3, the incumbent) simply ignores it.
+    """
+
+    query = "query"
+    document = "document"
+
+
 @runtime_checkable
 class Embedder(Protocol):
-    async def embed(self, text: str) -> EmbedResult: ...
+    async def embed(self, text: str, *, side: EmbedSide) -> EmbedResult: ...
 
 
 def estimate_tokens(text: str, *, window: int) -> int:
@@ -95,23 +117,49 @@ class LocalEmbedder:
     the instance itself is cached at module scope by ``get_embedder``;
     both the load and the encode are dispatched to a worker thread.
 
-    Emits exactly the fleet ``embed_dim`` via ``_truncate_normalize``,
-    the same coercion :class:`HostedEmbedder` applies. The invariant
-    ("every embedder, local or hosted, MUST emit this dim" --
-    ``config.embed_dim``) was enforced on the hosted side only, so the
-    local tier could host exactly one model: the default bge-m3, whose
-    1024 native dim happens to equal the fleet dim. Any other checkpoint
-    failed at the first write with ``memory.dim_mismatch``, which is why
-    the 2026-07-03 embedder round could only compare 1024d models.
-    Truncation is the documented Matryoshka procedure and is meaningful
-    only for MRL-trained checkpoints; a non-MRL model truncated here
-    loses quality silently, so a candidate's MRL support belongs in the
-    evidence for adopting it. A model emitting FEWER dims than the fleet
-    cannot be padded faithfully and still fails at the write, by
-    design."""
+    Emits exactly ``embed_dims.EMBED_DIM`` via ``_truncate_normalize``,
+    the same coercion :class:`HostedEmbedder` applies. That invariant
+    ("every embedder, local or hosted, MUST emit this dim") used to be
+    enforced on the hosted side only, so the local tier could host exactly
+    one model: the default bge-m3, whose native width happens to equal the
+    fleet dim. Any other checkpoint failed at its first write with
+    ``memory.dim_mismatch``, which is why the 2026-07-03 embedder round
+    could compare only models of that one width.
 
-    def __init__(self, model_name: str = "BAAI/bge-m3") -> None:
+    Truncation is the documented Matryoshka procedure and it is only
+    principled for an MRL-trained checkpoint: an ordinary model's
+    dimensions carry no nesting, so cutting it to the fleet width loses
+    real information and the loss shows up as slightly worse retrieval
+    rather than as an error. That is why ``mrl`` is not inferred. A wider
+    checkpoint that has not DECLARED Matryoshka support is refused at
+    load, which is the noisy failure the coercion would otherwise have
+    replaced with a silent degradation. A narrower one is refused for a
+    stronger reason: a short vector cannot be padded faithfully at all."""
+
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-m3",
+        *,
+        mrl: bool | None = None,
+        revision: str | None = None,
+    ) -> None:
+        """``mrl`` declares that this checkpoint is Matryoshka-trained and
+        may therefore be truncated to the fleet dim. ``None`` reads the
+        deployment's answer for its configured model
+        (``MYCELIUM_EMBED_MODEL_IS_MRL``); the embedder round passes it per
+        candidate, because in a round the claim belongs to the candidate
+        and is part of the evidence for adopting it.
+
+        ``revision`` pins the checkpoint to one commit of its repository.
+        ``None`` follows the repository's default branch, which is what a
+        deployment wants (it upgrades when the image is rebuilt) and what a
+        measurement must not do: a model id is a moving reference, and
+        ``Qwen3-Embedding-0.6B`` was republished in April 2026, after the
+        round that scored it. A comparison whose inputs can change under it
+        is not reproducible, so the round pins every candidate."""
         self._model_name = model_name
+        self._mrl = mrl
+        self._revision = revision
         self._model: object | None = None
         self._load_lock = asyncio.Lock()
 
@@ -123,7 +171,8 @@ class LocalEmbedder:
                 raise RuntimeError(
                     "LocalEmbedder requires the 'sentence-transformers' extra"
                 ) from exc
-            model = SentenceTransformer(self._model_name)
+            model = SentenceTransformer(self._model_name, revision=self._revision)
+            self._check_dim_is_usable(model)
             # bge-m3 ships max_seq_length=8192. Transformer attention cost is
             # quadratic in sequence length, so a single 8192-token sequence
             # alone can allocate multiple GB of activations, and the encode
@@ -140,6 +189,39 @@ class LocalEmbedder:
                     model.max_seq_length = cap
             self._model = model
         return self._model
+
+    def _check_dim_is_usable(self, model: object) -> None:
+        """Refuse, at LOAD time, a checkpoint whose width the fleet cannot
+        honor. Here rather than at the first encode because this is a
+        property of the configuration, not of the text: the answer is the
+        same for every call, so the first one should be the one that says
+        so, while the process is still starting and the message can still
+        name the model."""
+        getter = getattr(model, "get_sentence_embedding_dimension", None)
+        native = getter() if callable(getter) else None
+        if not isinstance(native, int) or native == EMBED_DIM:
+            # Unknown width is not a refusal: a stand-in that does not
+            # implement the accessor is still a usable embedder, and the
+            # real check on what it emits is the one at the write.
+            return
+        if native < EMBED_DIM:
+            raise RuntimeError(
+                f"embedder {self._model_name!r} emits {native} dims, narrower than the "
+                f"fleet dim {EMBED_DIM}. A short vector cannot be padded faithfully "
+                f"(the inner-product opclass assumes a real unit vector), so this "
+                f"checkpoint cannot serve the local tier as the column stands."
+            )
+        if not self._mrl_declared():
+            raise RuntimeError(
+                f"embedder {self._model_name!r} emits {native} dims, wider than the fleet "
+                f"dim {EMBED_DIM}, and has not been declared Matryoshka-trained. "
+                f"Truncating a non-MRL checkpoint degrades retrieval silently. Set "
+                f"MYCELIUM_EMBED_MODEL_IS_MRL=true (or pass mrl=True) only if the model "
+                f"card documents MRL support at {EMBED_DIM} dims."
+            )
+
+    def _mrl_declared(self) -> bool:
+        return get_settings().embed_model_is_mrl if self._mrl is None else self._mrl
 
     async def _model_ready(self) -> object:
         # Fast path: already loaded, no lock contention.
@@ -172,20 +254,54 @@ class LocalEmbedder:
         dim = getter() if callable(getter) else None
         return int(dim) if isinstance(dim, int) else None
 
-    async def embed(self, text: str) -> EmbedResult:  # pragma: no cover - network/model
+    def declared_prompt(self, side: EmbedSide) -> str | None:
+        """The instruction prefix this CHECKPOINT declares for ``side``, or
+        ``None`` when it declares none (a symmetric model, or a side it does
+        not distinguish). ``None`` until the model is loaded.
+
+        Read from the checkpoint's own ``config_sentence_transformers.json``
+        (sentence-transformers exposes it as ``model.prompts``) rather than
+        configured next to the model name. A prefix written by hand beside a
+        model id is a second copy of something the model already states, and
+        the two drift the first time a checkpoint is republished with a
+        different instruction -- at which point the model is being run
+        outside its training configuration again, which is the exact failure
+        this seam exists to prevent."""
+        prompts = getattr(self._model, "prompts", None)
+        if not isinstance(prompts, dict):
+            return None
+        prompt = prompts.get(side.value)
+        return prompt if isinstance(prompt, str) and prompt else None
+
+    def _prompt_name(self, side: EmbedSide) -> str | None:
+        """The ``prompt_name`` to hand ``encode``. ``None`` when the model
+        declares nothing for this side -- passing a name it does not know is
+        a ValueError, not a no-op."""
+        return side.value if self.declared_prompt(side) is not None else None
+
+    async def embed(  # pragma: no cover - network/model
+        self, text: str, *, side: EmbedSide
+    ) -> EmbedResult:
         model = await self._model_ready()
+        prompt_name = self._prompt_name(side)
 
         def _run() -> list[float]:
-            return list(model.encode(text, normalize_embeddings=True))  # type: ignore[attr-defined]
+            return list(
+                model.encode(  # type: ignore[attr-defined]
+                    text, normalize_embeddings=True, prompt_name=prompt_name
+                )
+            )
 
         vec = await asyncio.to_thread(_run)
         return EmbedResult(
-            vector=_truncate_normalize(vec, get_settings().embed_dim),
+            vector=_truncate_normalize(vec, EMBED_DIM),
             model_id=self._model_name,
             tokens=max(1, len(text.split())),
         )
 
-    async def embed_batch(self, texts: list[str]) -> list[EmbedResult]:  # pragma: no cover - model
+    async def embed_batch(  # pragma: no cover - model
+        self, texts: list[str], *, side: EmbedSide
+    ) -> list[EmbedResult]:
         """Encode many texts, grouped so that peak memory is bounded.
 
         SentenceTransformer batches internally, so batching is ~an order of
@@ -210,21 +326,27 @@ class LocalEmbedder:
             budget=settings.embedder_batch_token_budget,
             window=settings.embedder_max_seq_tokens,
         )
+        # The batched path is the INGEST path, so a side dropped here would
+        # mis-embed a whole corpus while the single-encode path stayed right,
+        # and the run would still produce a complete table.
+        prompt_name = self._prompt_name(side)
 
         def _run() -> list[list[float]]:
             rows: list[list[float]] = []
             for group in groups:
                 arr = model.encode(  # type: ignore[attr-defined]
-                    group, normalize_embeddings=True, batch_size=len(group)
+                    group,
+                    normalize_embeddings=True,
+                    batch_size=len(group),
+                    prompt_name=prompt_name,
                 )
                 rows.extend(list(row) for row in arr)
             return rows
 
         vecs = await asyncio.to_thread(_run)
-        target = settings.embed_dim
         return [
             EmbedResult(
-                vector=_truncate_normalize(v, target),
+                vector=_truncate_normalize(v, EMBED_DIM),
                 model_id=self._model_name,
                 tokens=max(1, len(t.split())),
             )
@@ -250,7 +372,7 @@ class HostedEmbedder:
     APIs). httpx-only, same shape as :class:`mycelium_core.llm_openai.OpenAILLM`.
     Emits exactly ``target_dim`` floats: it requests ``dimensions`` (the
     Matryoshka knob) and defensively truncates + L2-renormalizes
-    client-side, so the fleet ``embed_dim`` is always honored regardless
+    client-side, so the fleet dim is always honored regardless
     of what the endpoint returns. Token counts come from the API ``usage``
     block so the metering seam charges real tokens."""
 
@@ -262,12 +384,25 @@ class HostedEmbedder:
         base_url: str,
         target_dim: int,
         timeout: float = 30.0,
+        prefixes: Mapping[EmbedSide, str] | None = None,
     ) -> None:
+        """``prefixes`` is the hosted equivalent of what a local checkpoint
+        declares in its own config. It has to be supplied rather than read,
+        because an ``/v1/embeddings`` endpoint serves a model without
+        exposing its sentence-transformers configuration: the instruction
+        the model was trained with is knowable only from its model card.
+        Empty (the default) is a symmetric model, and is what every hosted
+        provider configured so far is."""
         self._api_key = api_key
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._target_dim = target_dim
         self._timeout = timeout
+        self._prefixes = dict(prefixes or {})
+
+    def _apply(self, text: str, side: EmbedSide) -> str:
+        prefix = self._prefixes.get(side, "")
+        return f"{prefix}{text}" if prefix else text
 
     @property
     def model_id(self) -> str:
@@ -292,8 +427,8 @@ class HostedEmbedder:
             return total
         return max(1, len(fallback.split()))
 
-    async def embed(self, text: str) -> EmbedResult:
-        data = await self._post(text)
+    async def embed(self, text: str, *, side: EmbedSide) -> EmbedResult:
+        data = await self._post(self._apply(text, side))
         rows = data.get("data") or []
         raw = (rows[0] if rows else {}).get("embedding") or []
         usage = data.get("usage") or {}
@@ -303,10 +438,10 @@ class HostedEmbedder:
             tokens=self._tokens(usage, text),
         )
 
-    async def embed_batch(self, texts: list[str]) -> list[EmbedResult]:
+    async def embed_batch(self, texts: list[str], *, side: EmbedSide) -> list[EmbedResult]:
         if not texts:
             return []
-        data = await self._post(texts)
+        data = await self._post([self._apply(t, side) for t in texts])
         rows = sorted(data.get("data") or [], key=lambda d: d.get("index", 0))
         usage = data.get("usage") or {}
         # The batch usage is for the whole call; attribute a per-row share
@@ -382,22 +517,13 @@ def embedder_available() -> bool:
         return False
 
 
-async def embed_batch(emb: Embedder, texts: list[str]) -> list[EmbedResult]:
+async def embed_batch(emb: Embedder, texts: list[str], *, side: EmbedSide) -> list[EmbedResult]:
     """Use the embedder's batched API when available, fall back to a
     sequential loop otherwise. Lets callers (e.g. gateway index build)
     benefit from real batching without forcing every Embedder to
     implement it on the Protocol."""
     method = getattr(emb, "embed_batch", None)
     if method is not None:
-        coro = cast(Callable[[list[str]], Awaitable[list[EmbedResult]]], method)
-        return await coro(texts)
-    return [await emb.embed(t) for t in texts]
-
-
-def embed_dim() -> int:
-    return get_settings().embed_dim
-
-
-def embed_dim_hosted() -> int:
-    """Fixed dim of the hosted tier (``embedding_hosted``, halfvec)."""
-    return get_settings().embed_dim_hosted
+        coro = cast(Callable[..., Awaitable[list[EmbedResult]]], method)
+        return await coro(texts, side=side)
+    return [await emb.embed(t, side=side) for t in texts]

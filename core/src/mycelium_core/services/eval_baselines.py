@@ -33,7 +33,7 @@ import dataclasses
 import hashlib
 import json
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from random import Random
 from typing import Any
@@ -41,6 +41,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mycelium_core.embedder import EmbedSide
 from mycelium_core.services import memory
 from mycelium_core.services.eval_queries import QueryRecord
 from mycelium_core.services.eval_stats import cluster_bootstrap, mcnemar_exact
@@ -235,7 +236,7 @@ class NaiveRagIndex:
     ) -> NaiveRagIndex:
         entries: list[tuple[str, list[float]]] = []
         for unit_id, piece in chunk_units(ws, chunk_chars=chunk_chars):
-            res = await embedder.embed(piece)
+            res = await embedder.embed(piece, side=EmbedSide.document)
             entries.append((unit_id, list(res.vector)))
         return cls(entries)
 
@@ -325,7 +326,7 @@ async def run_baselines(
             continue
         project_id = resolve_query_project(r, ws, ingest)
         gold_tokens = _tokens([texts_by_unit.get(u, "") for u in r.gold_unit_ids])
-        qvec = list((await embedder.embed(r.query_text)).vector)
+        qvec = list((await embedder.embed(r.query_text, side=EmbedSide.query)).vector)
 
         for name in systems:
             if name.startswith("mycelium"):
@@ -400,13 +401,46 @@ def _rr(rank: int | None) -> float:
     return 1.0 / rank if rank else 0.0
 
 
-def paired_table(
+@dataclasses.dataclass(frozen=True)
+class PairedStat:
+    """One system's paired comparison against the base run.
+
+    Every field is a number the table below prints. It exists as a value
+    because a promotion rule that asks for significance needs the same
+    McNemar p the reader sees, and computing it twice is how a printed
+    table and a decision start disagreeing.
+    """
+
+    system: str
+    proxy: bool
+    #: Questions both runs answered (impossible ones excluded).
+    n: int
+    recall: float
+    d_recall: float
+    #: Exact McNemar on the discordant pairs. Two-sided, uncorrected: a
+    #: round comparing several candidates against one base is making
+    #: several comparisons, and the correction belongs to the round that
+    #: knows how many, not to the statistic.
+    mcnemar_p: float
+    mrr: float
+    d_mrr: float
+    ci_lo: float
+    ci_hi: float
+    #: Per-category recall delta and support. A round can pre-register the
+    #: category an improvement must show up in, which the pooled number
+    #: cannot answer: a model can gain on one category and lose on another
+    #: and still come out ahead overall.
+    d_recall_by_category: Mapping[str, float] = dataclasses.field(default_factory=dict)
+    n_by_category: Mapping[str, int] = dataclasses.field(default_factory=dict)
+
+
+def paired_stats(
     runs: Sequence[SystemRun],
     *,
     base_system: str = SYSTEM_MYCELIUM,
     seed: int = 42,
     n_resamples: int = 2000,
-) -> str:
+) -> list[PairedStat]:
     """Base-vs-each-system paired comparison: delta recall@k with exact
     McNemar p on the discordant pairs, delta MRR with a cluster-bootstrap CI
     (clusters = fact_id). Scored queries only (impossible excluded).
@@ -415,22 +449,18 @@ def paired_table(
     defaults to the T6 baseline matrix's own base, and is a parameter so a
     different paired round (the embedder round compares candidates against
     the incumbent embedder, not against ``mycelium``) reuses this statistic
-    instead of growing a second copy of it."""
+    instead of growing a second copy of it.
+
+    The base run is included in the result, comparing against itself, so a
+    caller rendering a table gets every row from one list."""
     by_system: dict[str, dict[str, dict[str, Any]]] = {
         run.system: {rec["qid"]: rec for rec in run.records if not rec["impossible"]}
         for run in runs
     }
     base = by_system.get(base_system)
     if not base:
-        raise ValueError(f"paired_table: base run {base_system!r} missing")
-    # Column width from the data: the T6 systems are short names, but a
-    # paired round over embedders labels its runs with HuggingFace ids,
-    # which are long enough to shift every column of a fixed-width table.
-    w = max(20, *(len(r.system) + (8 if r.proxy else 0) for r in runs)) + 2
-    lines = [
-        f"{'system':<{w}}{'n':>5}  {'recall':>7} {'Δrecall':>8} {'McNemar p':>10}  "
-        f"{'MRR':>6} {'ΔMRR':>7} {'Δ95%CI':>17}",
-    ]
+        raise ValueError(f"paired_stats: base run {base_system!r} missing")
+    out: list[PairedStat] = []
     for run in runs:
         recs = by_system[run.system]
         qids = sorted(set(recs) & set(base))
@@ -440,7 +470,7 @@ def paired_table(
         hits = sum(1 for q in qids if recs[q]["rank"] is not None)
         recall = hits / n
         base_recall = sum(1 for q in qids if base[q]["rank"] is not None) / n
-        # discordants: b = mycelium hit & system miss, c = miss & hit
+        # discordants: b = base hit & system miss, c = miss & hit
         b = sum(1 for q in qids if base[q]["rank"] is not None and recs[q]["rank"] is None)
         c = sum(1 for q in qids if base[q]["rank"] is None and recs[q]["rank"] is not None)
         p = mcnemar_exact(b, c)
@@ -451,10 +481,60 @@ def paired_table(
         rng = Random(seed)  # noqa: S311 (resampling determinism, not crypto)
         lo, hi = cluster_bootstrap(clustered, rng=rng, n_resamples=n_resamples)
         d_mrr = sum(v for _, v in clustered) / n
-        label = run.system + (" (proxy)" if run.proxy else "")
+        # The category comes from the records rather than from an argument:
+        # it is the dataset's own label for the question, and the two runs
+        # answer the SAME questions, so the base's label is the same label.
+        per_cat_n: dict[str, int] = {}
+        per_cat_hits: dict[str, float] = {}
+        for q in qids:
+            cat = str(recs[q].get("category") or "?")
+            per_cat_n[cat] = per_cat_n.get(cat, 0) + 1
+            delta = (1.0 if recs[q]["rank"] is not None else 0.0) - (
+                1.0 if base[q]["rank"] is not None else 0.0
+            )
+            per_cat_hits[cat] = per_cat_hits.get(cat, 0.0) + delta
+        out.append(
+            PairedStat(
+                system=run.system,
+                proxy=run.proxy,
+                n=n,
+                recall=recall,
+                d_recall=recall - base_recall,
+                mcnemar_p=p,
+                mrr=mrr,
+                d_mrr=d_mrr,
+                ci_lo=lo,
+                ci_hi=hi,
+                d_recall_by_category={k: v / per_cat_n[k] for k, v in per_cat_hits.items()},
+                n_by_category=per_cat_n,
+            )
+        )
+    return out
+
+
+def paired_table(
+    runs: Sequence[SystemRun],
+    *,
+    base_system: str = SYSTEM_MYCELIUM,
+    seed: int = 42,
+    n_resamples: int = 2000,
+) -> str:
+    """:func:`paired_stats`, rendered as a fixed-width table."""
+    stats = paired_stats(runs, base_system=base_system, seed=seed, n_resamples=n_resamples)
+    # Column width from the data: the T6 systems are short names, but a
+    # paired round over embedders labels its runs with HuggingFace ids,
+    # which are long enough to shift every column of a fixed-width table.
+    w = max(20, *(len(r.system) + (8 if r.proxy else 0) for r in runs)) + 2
+    lines = [
+        f"{'system':<{w}}{'n':>5}  {'recall':>7} {'Δrecall':>8} {'McNemar p':>10}  "
+        f"{'MRR':>6} {'ΔMRR':>7} {'Δ95%CI':>17}",
+    ]
+    for s in stats:
+        label = s.system + (" (proxy)" if s.proxy else "")
         lines.append(
-            f"{label:<{w}}{n:>5}  {recall:>7.3f} {recall - base_recall:>+8.3f} "
-            f"{p:>10.4f}  {mrr:>6.3f} {d_mrr:>+7.3f} [{lo:>+.3f},{hi:>+.3f}]"
+            f"{label:<{w}}{s.n:>5}  {s.recall:>7.3f} {s.d_recall:>+8.3f} "
+            f"{s.mcnemar_p:>10.4f}  {s.mrr:>6.3f} {s.d_mrr:>+7.3f} "
+            f"[{s.ci_lo:>+.3f},{s.ci_hi:>+.3f}]"
         )
     return "\n".join(lines)
 

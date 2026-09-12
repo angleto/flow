@@ -40,7 +40,7 @@ from mycelium_core.adjudication.base import (
     StrategyRequirements,
 )
 from mycelium_core.ai_providers import get_llm
-from mycelium_core.embedder import get_embedder
+from mycelium_core.embedder import EmbedSide, get_embedder
 from mycelium_core.models.adjudication import AdjudicationStepKind
 
 _DEFAULT_PERSONAS: tuple[str, ...] = (
@@ -365,7 +365,7 @@ class DebateStrategy:
                     result.text, default_changed_mind=(round_no == 0)
                 )
                 embed_text = position + ("\n" + rationale if rationale else "")
-                emb = await embedder.embed(embed_text)
+                emb = await embedder.embed(embed_text, side=EmbedSide.document)
                 turn = _Turn(
                     agent_id=agent_id,
                     position=position,

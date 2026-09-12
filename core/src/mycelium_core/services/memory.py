@@ -13,6 +13,7 @@ org/project (ADR-0007).
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -22,8 +23,8 @@ from sqlalchemy import ColumnElement, delete, func, select, true, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mycelium_core.config import get_settings
-from mycelium_core.embedder import Embedder, EmbedResult, get_embedder
+from mycelium_core.embed_dims import EMBED_DIM, EMBED_DIM_HOSTED
+from mycelium_core.embedder import Embedder, EmbedResult, EmbedSide, get_embedder
 from mycelium_core.errors import DomainError, NotFoundError
 from mycelium_core.i18n import MessageCode
 from mycelium_core.models.billing import CostBasis
@@ -48,6 +49,8 @@ from mycelium_core.services.retrieval.types import (
     ProjectScope,
     _AnyProject,
 )
+
+logger = logging.getLogger(__name__)
 
 _RRF_K = 60
 _OVERSAMPLE = 50
@@ -242,18 +245,30 @@ class RetrievalMeta:
     rerank_failed: bool = False
 
 
-async def _safe_embed(emb: Embedder, text: str) -> EmbedResult | None:
+async def _safe_embed(emb: Embedder, text: str, *, side: EmbedSide) -> EmbedResult | None:
     """Embed defensively. The local model depends on an optional extra
     (``sentence-transformers``); if it is missing or fails to load,
     ``embed`` raises (ImportError/RuntimeError/...). Memory must still
     work in keyword-only mode, so any failure (or an empty vector) is
     swallowed here and the caller degrades to FTS-only. Never raises
-    because the embedder is unavailable."""
+    because the embedder is unavailable.
+
+    This helper serves both halves of the system -- the write that stores a
+    blob and the search that looks for one -- so ``side`` is the caller's to
+    state and cannot be defaulted here: defaulting it would silently make
+    one of the two wrong for every instruction-tuned model."""
     try:
-        result = await emb.embed(text)
+        result = await emb.embed(text, side=side)
     except Exception:
         # Optional dependency / model load is best-effort: any failure
-        # degrades to keyword-only, never propagates to the caller.
+        # degrades to keyword-only, never propagates to the caller. It is
+        # LOGGED because the degradation is otherwise invisible from the
+        # outside -- a workspace whose model is misconfigured (a refused
+        # width, a checkpoint that will not load) writes blobs with no
+        # vector and searches keyword-only, and every one of those looks
+        # like an ordinary result. The blob id is not known yet; the
+        # request's correlation id carries the attribution.
+        logger.warning("embed failed; this write degrades to keyword-only", exc_info=True)
         return None
     if not result.vector:
         return None
@@ -442,9 +457,8 @@ async def write_blob(
     from mycelium_core.services.embedder_resolver import resolve_hosted_embedder
 
     emb = embedder or get_embedder()
-    settings = get_settings()
-    expected = settings.embed_dim
-    expected_hosted = settings.embed_dim_hosted
+    expected = EMBED_DIM
+    expected_hosted = EMBED_DIM_HOSTED
     selected = chunker or pick_chunker(namespace=namespace, text=text_body)
     pieces = selected.chunks(text_body)
     # Cache tag computation outside the loop: explicit/channel/inherited
@@ -463,7 +477,7 @@ async def write_blob(
 
     first_blob: MemoryBlob | None = None
     for piece in pieces:
-        result = await _safe_embed(emb, piece.text)
+        result = await _safe_embed(emb, piece.text, side=EmbedSide.document)
         if result is not None and len(result.vector) != expected:
             raise DomainError(MessageCode.MEMORY_DIM_MISMATCH, expected=str(expected))
         if result is not None:
@@ -482,7 +496,9 @@ async def write_blob(
         # fixed); surface it. The local write above already succeeded so the
         # row stays searchable in keyword + local semantic regardless.
         result_hosted = (
-            await _safe_embed(hosted_emb, piece.text) if hosted_emb is not None else None
+            await _safe_embed(hosted_emb, piece.text, side=EmbedSide.document)
+            if hosted_emb is not None
+            else None
         )
         if result_hosted is not None and len(result_hosted.vector) != expected_hosted:
             raise DomainError(MessageCode.MEMORY_DIM_MISMATCH, expected=str(expected_hosted))
@@ -615,7 +631,7 @@ async def retrieve_with_meta(
     # ask, so the query is never embedded -- no dense branch, no humus, no
     # cross-encoder, and no embed cost metered for a query that could only
     # have returned its arbitrary nearest neighbours.
-    qres = None if exact_only else await _safe_embed(emb, query)
+    qres = None if exact_only else await _safe_embed(emb, query, side=EmbedSide.query)
     if qres is not None:
         # The query embedding is also a metered cost op. Skipped when
         # the embedder is unavailable: there is no semantic branch and
@@ -638,7 +654,9 @@ async def retrieve_with_meta(
     hosted_emb = hosted[0] if hosted is not None else None
     hosted_basis = hosted[1] if hosted is not None else CostBasis.local
     qres_hosted = (
-        await _safe_embed(hosted_emb, query) if hosted_emb is not None and not exact_only else None
+        await _safe_embed(hosted_emb, query, side=EmbedSide.query)
+        if hosted_emb is not None and not exact_only
+        else None
     )
     if qres_hosted is not None:
         await billing.meter_if_billable(

@@ -35,6 +35,10 @@ dependencies = [
 # local sentence-transformers model. Heavy (pulls torch); kept optional
 # so CI/dev without it inject a fake embedder. Enable with:
 #   uv sync --extra local-embedder
+# The >=3 floor is load-bearing since ADR-0061: LocalEmbedder reads the
+# checkpoint's declared instruction prefixes (``model.prompts``) and passes
+# ``prompt_name`` to ``encode``. Neither exists before 3.0, where the call
+# would raise TypeError instead of embedding the query side correctly.
 [project.optional-dependencies]
 local-embedder = ["sentence-transformers>=3"]
 # Opt-in local speech-to-text (ADR-0020, task 44ba3f14): LocalSTT is

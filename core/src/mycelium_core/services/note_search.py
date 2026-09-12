@@ -58,9 +58,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, object_session
 
-from mycelium_core.embedder import Embedder, EmbedResult, get_embedder
+from mycelium_core.embed_dims import EMBED_DIM
+from mycelium_core.embedder import Embedder, EmbedResult, EmbedSide, get_embedder
 from mycelium_core.models.index_scope import IndexScope
-from mycelium_core.models.memory_blob import EMBED_DIM, BlobSource, MemoryBlob
+from mycelium_core.models.memory_blob import BlobSource, MemoryBlob
 from mycelium_core.models.note import Note
 from mycelium_core.models.note_part import NotePart
 from mycelium_core.models.note_part_index_pointer import NotePartIndexPointer
@@ -168,8 +169,8 @@ class _TimeoutEmbedder:
     inner: Embedder
     timeout: float
 
-    async def embed(self, text: str) -> EmbedResult:
-        return await asyncio.wait_for(self.inner.embed(text), timeout=self.timeout)
+    async def embed(self, text: str, *, side: EmbedSide) -> EmbedResult:
+        return await asyncio.wait_for(self.inner.embed(text, side=side), timeout=self.timeout)
 
 
 async def _safe_embed(
@@ -179,7 +180,7 @@ async def _safe_embed(
     keyword-only result; the FTS branch still covers the blob and the
     ``embedding_migration`` worker re-embeds it later."""
     try:
-        result = await embedder.embed(text_body)
+        result = await embedder.embed(text_body, side=EmbedSide.document)
     except TimeoutError:
         return None, _NO_EMBED_MODEL, 0
     except Exception as exc:

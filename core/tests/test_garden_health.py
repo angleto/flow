@@ -25,9 +25,10 @@ from _fake_ai import FakeLLM  # noqa: E402
 
 from mycelium_core.ai_providers import set_llm_override  # noqa: E402
 from mycelium_core.db import admin_session, tenant_session  # noqa: E402
+from mycelium_core.embed_dims import EMBED_DIM  # noqa: E402
 from mycelium_core.models.activity_log import ActivityLog  # noqa: E402
 from mycelium_core.models.classification_feedback import ClassificationFeedback  # noqa: E402
-from mycelium_core.models.memory_blob import EMBED_DIM, MemoryBlob  # noqa: E402
+from mycelium_core.models.memory_blob import MemoryBlob  # noqa: E402
 from mycelium_core.models.note import Note, NoteKind  # noqa: E402
 from mycelium_core.models.note_tag import NoteTag  # noqa: E402
 from mycelium_core.models.tag import TagKind  # noqa: E402

@@ -14,7 +14,7 @@ import pytest
 from _fake_embedder import FakeEmbedder
 
 from mycelium_core.db import admin_session, tenant_session
-from mycelium_core.embedder import set_embedder_override
+from mycelium_core.embedder import EmbedSide, set_embedder_override
 from mycelium_core.services import eval_baselines as base
 from mycelium_core.services import eval_report
 from mycelium_core.services.auth import signup
@@ -129,7 +129,13 @@ async def test_naive_rag_maps_chunks_to_units(_embedder: None) -> None:
     ws = generate_workspace(seed=_SEED, scale=_SCALE)
     index = await base.NaiveRagIndex.build(ws, _FAKE)
     fact = next(f for f in ws.facts if f.category == "gold" and f.queryable)
-    qvec = list((await _FAKE.embed(f"{fact.entity_name} {fact.attribute} {fact.value}")).vector)
+    qvec = list(
+        (
+            await _FAKE.embed(
+                f"{fact.entity_name} {fact.attribute} {fact.value}", side=EmbedSide.query
+            )
+        ).vector
+    )
     ranked = index.rank(qvec, k=10)
     assert ranked, "naive RAG must return ranked units"
     assert any(h.unit_id in fact.gold_unit_ids for h in ranked)

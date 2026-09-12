@@ -20,7 +20,7 @@ Format: Status, Context, Decision, Consequences, Alternatives rejected.
 - [0009 Invoice immutability, soft-delete carve-out](0009-invoice-immutability.md)
 - [0010 Conservation: free AdE service](0010-conservation-ade-free-service.md)
 - [0011 SDI: intermediary/mandate model, v1 B2B/B2C](0011-sdi-intermediary-mandate-v1-b2b.md) — revised by [0053](0053-transmitter-not-emitter.md): the mandate is to TRANSMIT, so `TerzoIntermediarioOSoggettoEmittente` / `SoggettoEmittente=TZ` are no longer emitted; `IdTrasmittente` stands
-- [0012 LLM/Embedder abstraction, reuse the bitvision pattern](0012-llm-embedder-abstraction.md)
+- [0012 LLM/Embedder abstraction, reuse the bitvision pattern](0012-llm-embedder-abstraction.md) — the embedder half is revised by [0061](0061-the-embedder-seam-has-a-side.md): the seam carries a query/document side
 - [0013 Planning advisory layer, deterministic core](0013-planning-advisory-layer.md)
 - [0014 Personal domain and budget envelope](0014-personal-domain-budgets.md)
 - [0015 RLS: two Postgres roles and SECURITY DEFINER provisioning](0015-rls-two-role-and-provisioning.md)
@@ -68,3 +68,5 @@ Format: Status, Context, Decision, Consequences, Alternatives rejected.
 - [0057 The browser is a fourth surface, and it holds a scoped credential](0057-the-browser-is-a-fourth-surface.md) — decision 5 (the `externally_connectable` handshake) superseded by [0059](0059-the-extension-asks-to-be-let-in.md)
 - [0058 Refuse to serve behind the schema, serve ahead of it](0058-refuse-to-serve-behind-the-schema.md)
 - [0059 The extension asks to be let in, it is not handed a secret](0059-the-extension-asks-to-be-let-in.md) — supersedes decision 5 of [0057](0057-the-browser-is-a-fourth-surface.md)
+- [0060 The fleet embedding dim is schema, and truncation is declared](0060-the-fleet-dim-is-schema-not-configuration.md)
+- [0061 The embedder seam has a side, and the prefix comes from the checkpoint](0061-the-embedder-seam-has-a-side.md)

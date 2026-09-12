@@ -54,7 +54,7 @@ from typing import Any, Protocol
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mycelium_core.embedder import EmbedResult
+from mycelium_core.embedder import EmbedResult, EmbedSide
 from mycelium_core.models.memory_blob import MemoryBlob
 from mycelium_core.services.eval_workspace import (
     _ANAPHORIC_FRAMES,
@@ -793,7 +793,7 @@ async def compute_hardness(
         if not gold_blobs or not dist_blobs:
             skipped += 1
             continue
-        qvec = await embedder.embed(r.query_text)
+        qvec = await embedder.embed(r.query_text, side=EmbedSide.query)
         gold_lex = await _lex_score(session, org_id, gold_blobs, r.query_text)
         gold_dense = await _dense_score(session, org_id, gold_blobs, qvec)
         d_lex = await _lex_score(session, org_id, dist_blobs, r.query_text)

@@ -39,6 +39,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from mycelium_core.embed_dims import EMBED_DIM
 from mycelium_core.models.base import (
     Base,
     OrgScopedMixin,
@@ -46,9 +47,6 @@ from mycelium_core.models.base import (
     UUIDPKMixin,
     VersionMixin,
 )
-
-# Must match the fleet embedding dim (mycelium_core.models.memory_blob.EMBED_DIM).
-EMBED_DIM = 1024
 
 
 class AdjudicationStatus(enum.StrEnum):

@@ -28,8 +28,9 @@ are retrieval recall@k / MRR + abstention correctness -- not judged QA.
 EMBEDDER ROUND (``--embedders spec.json``): run the whole bench once per
 candidate embedder and print one paired comparison against the incumbent.
 Each candidate gets its own throwaway orgs, so no corpus ever mixes two
-vector spaces. See ``eval_embedder_round`` for the spec format and for why
-the query side is embedded through a separate override.
+vector spaces. Queries and documents are embedded differently when the
+checkpoint says so (``EmbedSide``, ADR-0061), which is how production
+embeds too. See ``eval_embedder_round`` for the spec format.
 
     MYCELIUM_DATABASE_URL_SYNC=... MYCELIUM_DATABASE_URL=... \
         uv run python scripts/eval_public_bench.py \
@@ -43,11 +44,10 @@ import argparse
 import asyncio
 import json
 import uuid
-from collections.abc import Callable
 from pathlib import Path
 
 from mycelium_core.db import admin_session, tenant_session
-from mycelium_core.embedder import Embedder, set_embedder_override
+from mycelium_core.embedder import Embedder, EmbedSide, set_embedder_override
 from mycelium_core.services import eval_embedder_round as round_
 from mycelium_core.services import eval_public_bench as bench
 from mycelium_core.services.auth import signup
@@ -63,36 +63,32 @@ def _load_instances(dataset: str, path: Path) -> list[bench.BenchInstance]:
     return [parse(obj) for obj in data]
 
 
-def _factory(emb: Embedder | None) -> Callable[[], Embedder] | None:
-    """``set_embedder_override`` takes a factory, not an instance."""
-    return None if emb is None else lambda: emb
-
-
 async def _run_pass(
     instances: list[bench.BenchInstance],
     args: argparse.Namespace,
     *,
     tag: str,
-    doc_embedder: Embedder | None = None,
-    query_embedder: Embedder | None = None,
+    embedder: Embedder | None = None,
 ) -> tuple[bench.BenchReport, tuple[bench.InstanceScore, ...]]:
     """One full pass over the dataset: a throwaway org per instance, ingest,
     then score.
 
-    ``doc_embedder`` / ``query_embedder`` are installed around the two phases
-    through ``set_embedder_override``. They are separate because an
-    instruction-tuned model prefixes the query side only, and the ``Embedder``
-    seam has no notion of side (see ``eval_embedder_round``). Leaving both
-    None runs the configured embedder for everything, which is the plain bench.
+    ONE embedder covers both phases. It used to be two, installed around
+    ingest and around scoring, because an instruction-tuned model prefixes
+    the query side only and the ``Embedder`` seam had no notion of side. The
+    seam has one now (``EmbedSide``), so the asymmetry lives where production
+    can also use it, and this script no longer has to be read to know which
+    phase is running. ``None`` runs the configured embedder, which is the
+    plain bench.
     """
     scores: list[bench.InstanceScore] = []
     embedder_models: set[str] = set()
-    # Built once, outside the loop: both are constant across instances, and a
+    # Built once, outside the loop: it is constant across instances, and a
     # closure created per iteration would capture the loop's binding rather
     # than its value (ruff B023) -- harmless while the override is consumed
     # immediately, a real bug the first time one is deferred.
-    doc_factory = _factory(doc_embedder)
-    query_factory = _factory(query_embedder)
+    if embedder is not None:
+        set_embedder_override(lambda: embedder)
     for i, instance in enumerate(instances):
         async with admin_session() as s:
             r = await signup(
@@ -102,12 +98,8 @@ async def _run_pass(
                 org_name=f"BENCH-{args.dataset}-{i}",
             )
         org, user = r.org_id, r.user_id
-        if doc_factory is not None:
-            set_embedder_override(doc_factory)
         async with tenant_session(str(org), str(user)) as s:
             await bench.ingest_instance(s, org_id=org, actor_id=user, instance=instance)
-        if query_factory is not None:
-            set_embedder_override(query_factory)
         async with tenant_session(str(org), str(user)) as s:
             score = await bench.score_instance(
                 s,
@@ -148,20 +140,17 @@ async def _run_round(
     try:
         for candidate in spec.candidates:
             print(f"\n--- {candidate.name} ({candidate.model}) ---")
-            doc_emb, query_emb, inner = round_.build_embedders(candidate)
+            emb = round_.build_embedder(candidate)
             report, scores = await _run_pass(
-                instances,
-                args,
-                tag=f"{candidate.name} ",
-                doc_embedder=doc_emb,
-                query_embedder=query_emb,
+                instances, args, tag=f"{candidate.name} ", embedder=emb
             )
             outcomes.append(
                 round_.CandidateOutcome(
                     candidate=candidate,
                     report=report,
                     scores=scores,
-                    native_dim=inner.native_dim,
+                    native_dim=emb.native_dim,
+                    query_prompt=emb.declared_prompt(EmbedSide.query),
                 )
             )
     finally:

@@ -18,10 +18,11 @@ from _fake_embedder import FakeEmbedder
 from httpx import Response
 from sqlalchemy import select, update
 
-from mycelium_core.config import get_settings
 from mycelium_core.db import admin_session, tenant_session
+from mycelium_core.embed_dims import EMBED_DIM, EMBED_DIM_HOSTED
 from mycelium_core.embedder import (
     EmbedResult,
+    EmbedSide,
     set_embedder_override,
     set_hosted_embedder_override,
 )
@@ -42,8 +43,9 @@ class FakeHostedEmbedder:
 
     model_id = "fake-hosted"
 
-    async def embed(self, text: str) -> EmbedResult:
-        dim = get_settings().embed_dim_hosted
+    async def embed(self, text: str, *, side: EmbedSide) -> EmbedResult:
+        del side  # symmetric, like the local fake
+        dim = EMBED_DIM_HOSTED
         vec = [0.0] * dim
         vec[len(text) % dim] = 1.0
         return EmbedResult(vector=vec, model_id=self.model_id, tokens=max(1, len(text.split())))
@@ -61,7 +63,6 @@ async def test_local_write_then_hosted_backfill() -> None:
     async with admin_session() as s:
         a = await signup(s, email=_email(), password="pw-strong-123", org_name="EMB")
     org, user = a.org_id, a.user_id
-    settings = get_settings()
 
     # Local-only write (no hosted embedder yet): embedding populated at the
     # local dim, embedding_hosted NULL.
@@ -79,7 +80,7 @@ async def test_local_write_then_hosted_backfill() -> None:
                 select(MemoryBlob).where(MemoryBlob.id == blob.id, MemoryBlob.org_id == org)
             )
         ).scalar_one()
-        assert row.embedding is not None and len(row.embedding) == settings.embed_dim
+        assert row.embedding is not None and len(row.embedding) == EMBED_DIM
         assert row.embedding_hosted is None
 
     # Enable a hosted embedder (fake 4000d) and run the backfill: the
@@ -95,7 +96,7 @@ async def test_local_write_then_hosted_backfill() -> None:
         ).scalar_one()
         assert row.embedding_hosted is not None
         # halfvec reads back as a pgvector HalfVector value object.
-        assert len(row.embedding_hosted.to_list()) == settings.embed_dim_hosted
+        assert len(row.embedding_hosted.to_list()) == EMBED_DIM_HOSTED
         assert row.model_id_hosted == "fake-hosted"
 
         status = await svc.migration_status(s)
@@ -130,7 +131,7 @@ async def test_set_org_embedder_provider_probe_rejects_wrong_dim() -> None:
 
 @respx.mock
 async def test_set_org_embedder_provider_probe_accepts_correct_dim() -> None:
-    dim = get_settings().embed_dim_hosted
+    dim = EMBED_DIM_HOSTED
     respx.post("https://api.scaleway.ai/v1/embeddings").mock(
         return_value=Response(
             200, json={"data": [{"embedding": [0.1] * dim}], "usage": {"total_tokens": 1}}

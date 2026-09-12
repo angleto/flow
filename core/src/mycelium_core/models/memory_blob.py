@@ -30,20 +30,18 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from mycelium_core.embed_dims import EMBED_DIM, EMBED_DIM_HOSTED
 from mycelium_core.models.base import Base, OrgScopedMixin, TimestampMixin
 
 # Two embedding tiers, each a permanent store fused at search time (RRF):
-#  - LOCAL  (``embedding`` vector(1024)): bge-m3, always-on rank-0 fallback,
-#    works offline/OSS. 1024 = bge-m3 native, under pgvector's 2000 HNSW
-#    ceiling for ``vector``.
-#  - HOSTED (``embedding_hosted`` halfvec(4000)): per-org Scaleway, selected
-#    via ``org_embedder_provider``. 4000 = pgvector's HNSW ceiling for
-#    ``halfvec``, so any future model up to 4000 native fits (Matryoshka
-#    truncation) with no reindex.
-# Both dims are fixed at the DDL level; a change is a drop+rebuild of the
-# column (embeddings are re-derivable from ``text`` via the backfill).
-EMBED_DIM = 1024
-EMBED_DIM_HOSTED = 4000
+#  - LOCAL  (``embedding``): bge-m3, always-on rank-0 fallback, works
+#    offline/OSS.
+#  - HOSTED (``embedding_hosted``): per-org Scaleway, selected via
+#    ``org_embedder_provider``.
+# Both widths come from ``mycelium_core.embed_dims``, which is where the
+# reason for each number lives; both are fixed at the DDL level, so a
+# change is a drop+rebuild of the column (embeddings are re-derivable
+# from ``text`` via the backfill).
 
 
 class Tier(enum.StrEnum):

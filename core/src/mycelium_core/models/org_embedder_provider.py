@@ -8,7 +8,7 @@ reads this row, picks the embedder, and derives the ``CostBasis`` the
 metering seam charges on. No row => the local embedder, basis ``local``.
 
 Mirrors :mod:`mycelium_core.models.org_llm_provider`. Every hosted embedder
-MUST emit the fleet ``embed_dim`` (1024); the resolver enforces it.
+MUST emit ``embed_dims.EMBED_DIM_HOSTED``; the resolver enforces it.
 """
 
 from __future__ import annotations

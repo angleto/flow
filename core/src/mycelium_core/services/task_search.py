@@ -68,11 +68,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, object_session
 
-from mycelium_core.embedder import Embedder, EmbedResult, get_embedder
+from mycelium_core.embed_dims import EMBED_DIM
+from mycelium_core.embedder import Embedder, EmbedResult, EmbedSide, get_embedder
 from mycelium_core.errors import DomainError
 from mycelium_core.models.identity import Identity
 from mycelium_core.models.index_scope import IndexScope
-from mycelium_core.models.memory_blob import EMBED_DIM, BlobSource, MemoryBlob
+from mycelium_core.models.memory_blob import BlobSource, MemoryBlob
 from mycelium_core.models.note import Note
 from mycelium_core.models.note_part import NotePart
 from mycelium_core.models.note_part_index_pointer import NotePartIndexPointer
@@ -225,8 +226,8 @@ class _TimeoutEmbedder:
     inner: Embedder
     timeout: float
 
-    async def embed(self, text: str) -> EmbedResult:
-        return await asyncio.wait_for(self.inner.embed(text), timeout=self.timeout)
+    async def embed(self, text: str, *, side: EmbedSide) -> EmbedResult:
+        return await asyncio.wait_for(self.inner.embed(text, side=side), timeout=self.timeout)
 
 
 # ---------------------------------------------------------------- flush
@@ -408,7 +409,7 @@ async def _safe_embed(
     return a keyword-only result; the FTS branch will still cover this
     blob and :func:`run_embedding_backfill` retries later."""
     try:
-        result = await embedder.embed(text_body)
+        result = await embedder.embed(text_body, side=EmbedSide.document)
     except TimeoutError:
         # 2 s wall-clock cap was hit; storing keyword-only is the design
         # contract here, the backfill worker recovers the vector later.

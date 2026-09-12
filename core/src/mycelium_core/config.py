@@ -262,14 +262,6 @@ class Settings(BaseSettings):
     # ``needs_attention`` and ``dead`` rows are never swept.
     payment_connector_event_retention_days: int = 730
 
-    # Memory embeddings (docs/adr/0005). Single embedding store at a
-    # fixed fleet dim: every embedder (local or hosted) MUST emit this
-    # dim. 1024 = bge-m3 native AND under pgvector's HNSW 2000-dim
-    # ceiling (no halfvec needed); hosted Matryoshka models truncate to
-    # it. The dim is fixed at the DDL level; changing it = drop+rebuild
-    # the column (embeddings are derived from ``text``, re-embeddable).
-    embed_dim: int = 1024
-
     # Max size of a single note/task attachment. Stored as BYTEA in the
     # DB (no object store; co-tenant deploy), so the cap is deliberately
     # conservative. This is the DEFAULT when a workspace has not set its
@@ -560,8 +552,19 @@ class Settings(BaseSettings):
     note_search_backfill_interval_seconds: int = 60
 
     # Default LOCAL embedder model (the rank-0 fallback, ``embedding``
-    # vector(1024) column). bge-m3 emits 1024 natively = ``embed_dim``.
+    # column). bge-m3 emits ``embed_dims.EMBED_DIM`` natively.
     embed_model: str = "BAAI/bge-m3"
+    # Does ``embed_model`` document Matryoshka (MRL) training? Only an MRL
+    # checkpoint may be truncated to the fleet dim: its leading dimensions
+    # are trained to stand alone, so the cut is the procedure the model was
+    # built for. Truncating any other model still produces a vector of the
+    # right shape and silently worse retrieval, which is the failure this
+    # flag exists to refuse. Default false: the default model is natively
+    # at the fleet dim and never truncated, so nothing is claimed on its
+    # behalf, and a WIDER model refuses to load until someone who checked
+    # the model card says so. Not inferable from the checkpoint: MRL is a
+    # property of how it was trained, not of what it emits.
+    embed_model_is_mrl: bool = False
     # Sequence window the LOCAL embedder is allowed to use, in tokens.
     # bge-m3 ships 8192; attention memory is quadratic in this number, so a
     # single long note part could allocate multiple GB and OOMKill the whole
@@ -576,12 +579,6 @@ class Settings(BaseSettings):
     # apart in activations. 16384 = 8 texts at the full 2048-token window,
     # or many more short ones.
     embedder_batch_token_budget: int = 16384
-    # HOSTED tier dim (``embedding_hosted`` halfvec column). A per-org
-    # hosted embedder (Scaleway, ``org_embedder_provider``) emits this dim;
-    # 4000 = pgvector's HNSW ceiling for halfvec, so any future model up to
-    # 4000 native fits (Matryoshka truncation) with no reindex. The hosted
-    # tier coexists with the local tier and is fused at search time (RRF).
-    embed_dim_hosted: int = 4000
     # Embedding backfill worker (sweep-rate per workspace). Re-embeds
     # blobs whose vector is missing/stale (e.g. after a dim rebuild or a
     # per-org model swap). Per-workspace + exception-isolated, modest
