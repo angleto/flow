@@ -197,9 +197,8 @@ class LocalEmbedder:
         same for every call, so the first one should be the one that says
         so, while the process is still starting and the message can still
         name the model."""
-        getter = getattr(model, "get_sentence_embedding_dimension", None)
-        native = getter() if callable(getter) else None
-        if not isinstance(native, int) or native == EMBED_DIM:
+        native = _emitted_dim(model)
+        if native is None or native == EMBED_DIM:
             # Unknown width is not a refusal: a stand-in that does not
             # implement the accessor is still a usable embedder, and the
             # real check on what it emits is the one at the write.
@@ -248,11 +247,7 @@ class LocalEmbedder:
         Matryoshka truncation. A comparison between embedders that does not
         report this is not interpretable."""
         model = self._model
-        if model is None:
-            return None
-        getter = getattr(model, "get_sentence_embedding_dimension", None)
-        dim = getter() if callable(getter) else None
-        return int(dim) if isinstance(dim, int) else None
+        return None if model is None else _emitted_dim(model)
 
     def declared_prompt(self, side: EmbedSide) -> str | None:
         """The instruction prefix this CHECKPOINT declares for ``side``, or
@@ -352,6 +347,31 @@ class LocalEmbedder:
             )
             for v, t in zip(vecs, texts, strict=True)
         ]
+
+
+def _emitted_dim(model: object) -> int | None:
+    """What a loaded model says it emits, or ``None`` when it does not say.
+
+    Two names, newest first: sentence-transformers 5 renamed
+    ``get_sentence_embedding_dimension`` to ``get_embedding_dimension`` and
+    kept the old one as a deprecated alias that emits a FutureWarning on
+    every call. Asking for the old name alone works today and will stop
+    working when the alias goes; asking for the new name alone breaks
+    against the 3.x floor this package declares, where the native dim would
+    silently stop being reported and the truncation would go back to being
+    invisible. Measured, not assumed: the 2026-09-12 round printed that
+    warning twice per candidate against the installed 5.5.0.
+
+    ``None`` is not a refusal. A stand-in that implements neither accessor is
+    still a usable embedder, and what it actually emits is checked at the
+    write.
+    """
+    for name in ("get_embedding_dimension", "get_sentence_embedding_dimension"):
+        getter = getattr(model, name, None)
+        if callable(getter):
+            dim = getter()
+            return int(dim) if isinstance(dim, int) else None
+    return None
 
 
 def _truncate_normalize(vec: list[float], target_dim: int) -> list[float]:

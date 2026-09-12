@@ -55,7 +55,10 @@ class StubSentenceTransformer:
         self.prompts = dict(prompts or {})
         self.prompt_names: list[str | None] = []
 
-    def get_sentence_embedding_dimension(self) -> int:
+    def get_embedding_dimension(self) -> int:
+        """The name sentence-transformers 5 uses. The 3.x name is a separate
+        test below, because this package's floor still admits 3.x and the
+        deprecated alias is what a 3.x checkpoint would answer to."""
         return self._dim
 
     def _ramp(self, *, normalize: bool) -> list[float]:
@@ -370,3 +373,29 @@ async def test_an_empty_declaration_counts_as_no_prompt() -> None:
     await emb.embed("x", side=EmbedSide.document)
     assert stub.prompt_names == [None]
     assert emb.declared_prompt(EmbedSide.document) is None
+
+
+def test_the_three_x_accessor_name_still_answers() -> None:
+    """``sentence-transformers`` 5 renamed ``get_sentence_embedding_dimension``
+    to ``get_embedding_dimension`` and kept the old name as a deprecated
+    alias that warns on every call. This package's floor is >=3, so a
+    deployment can legitimately be running a version that has only the old
+    name; asking for the new one alone would silently stop reporting the
+    native dim there, and the truncation would go back to being invisible."""
+
+    class ThreeX:
+        def get_sentence_embedding_dimension(self) -> int:
+            return 4096
+
+    emb = LocalEmbedder("stub/3x")
+    emb._model = ThreeX()
+    assert emb.native_dim == 4096
+
+
+def test_a_model_that_reports_no_width_is_not_refused() -> None:
+    """Neither accessor: nothing to check, and the real check on what it
+    emits happens at the write. Refusing here would make the gate a second,
+    stricter definition of what an embedder is."""
+    emb = LocalEmbedder("stub/mute")
+    emb._model = object()
+    assert emb.native_dim is None
