@@ -53,19 +53,46 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
-from mycelium_core.embed_dims import EMBED_DIM
-from mycelium_core.embedder import LocalEmbedder
+from mycelium_core.config import get_settings
+from mycelium_core.embed_dims import EMBED_DIM, EMBED_DIM_HOSTED
+from mycelium_core.embedder import EmbedResult, EmbedSide, HostedEmbedder, LocalEmbedder
 from mycelium_core.services.eval_baselines import PairedStat, SystemRun, paired_stats, paired_table
 from mycelium_core.services.eval_public_bench import BenchReport, InstanceScore
+
+#: Hosted endpoints a candidate may name. A closed set rather than a free
+#: string because an unrecognised provider must stop the round: the
+#: alternative is a run that quietly measures the local default while its
+#: table names something else.
+PROVIDER_SCALEWAY = "scaleway"
+KNOWN_PROVIDERS = frozenset({PROVIDER_SCALEWAY})
+
+
+@runtime_checkable
+class RoundEmbedder(Protocol):
+    """What the round needs from a candidate, beyond embedding.
+
+    Both implementations answer these, with different strengths, and the
+    round prints both so a hosted row is never read as if it carried a local
+    row's evidence. ``native_dim`` is what a checkpoint emitted before the
+    fleet-dim coercion, and ``None`` from a hosted endpoint means "not
+    knowable", never "not truncated".
+    """
+
+    async def embed(self, text: str, *, side: EmbedSide) -> EmbedResult: ...
+
+    @property
+    def native_dim(self) -> int | None: ...
+
+    def declared_prompt(self, side: EmbedSide) -> str | None: ...
 
 
 @dataclass(frozen=True)
 class EmbedderCandidate:
     """One embedder under test, as declared in the round's spec file.
 
-    A candidate is a model id, a pin, and one claim. It carries no
+    A LOCAL candidate is a model id, a pin, and one claim. It carries no
     instruction prefix: the checkpoint declares its own in
     ``config_sentence_transformers.json`` and ``LocalEmbedder`` reads it
     there, so a spec file cannot state a prefix that disagrees with the
@@ -78,16 +105,40 @@ class EmbedderCandidate:
     model. A wider candidate that does not declare it refuses to load,
     which is the intended outcome -- a number measured from a silently
     degraded model is worse than a missing row.
+
+    ``provider`` names a HOSTED endpoint instead ("scaleway"), which is how
+    a model too large to hold in the backend pod can still be measured
+    against the incumbent: the vectors come over HTTP at the fleet width and
+    every other part of the run -- the column, the model_id filter, the
+    scoring path -- is the one production uses. The prefixes are declarable
+    ONLY here, and only because there is no checkpoint to read: an
+    ``/v1/embeddings`` endpoint serves a model without exposing its
+    sentence-transformers configuration, so the instruction is knowable only
+    from the model card. On a local candidate they are refused, because
+    there the model already states it and a second copy would be the thing
+    that drifts.
+
+    ``revision`` does not apply to a hosted candidate and is refused there
+    too: the endpoint serves whatever weights the provider has deployed, and
+    a pin the run cannot enforce would be a reproducibility claim that is
+    not true.
     """
 
     model: str
     label: str = ""
     mrl: bool = False
     revision: str = ""
+    provider: str = ""
+    query_prefix: str = ""
+    document_prefix: str = ""
 
     @property
     def name(self) -> str:
         return self.label or self.model
+
+    @property
+    def prefixes(self) -> dict[EmbedSide, str]:
+        return {EmbedSide.query: self.query_prefix, EmbedSide.document: self.document_prefix}
 
 
 @dataclass(frozen=True)
@@ -173,11 +224,13 @@ class RoundSpec:
 
 
 def load_round_spec(path: str | Path) -> RoundSpec:
-    """Parse a round spec file. Fails loudly on an unknown key, which is
-    also what retires a key: a spec still carrying ``query_prefix`` is one
-    written when the prefix lived here, and it must stop the round rather
-    than be ignored -- silently dropping it would run the candidate under a
-    prefix nobody could see."""
+    """Parse a round spec file. Fails loudly on an unknown key and on a key
+    that does not belong to the kind of candidate it appears on, because a
+    spec key that is silently dropped is how a round measures something other
+    than what its author wrote down: a ``query_prefix`` on a local candidate
+    would run under whatever the checkpoint declares while its author
+    believed they had chosen one, and a ``revision`` on a hosted candidate
+    would be a pin the run cannot enforce."""
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: expected a JSON object with 'baseline' and 'candidates'")
@@ -187,7 +240,11 @@ def load_round_spec(path: str | Path) -> RoundSpec:
     entries = raw.get("candidates")
     if not isinstance(entries, list) or not entries:
         raise ValueError(f"{path}: 'candidates' must be a non-empty list")
-    allowed = {"model", "label", "mrl", "revision"}
+    allowed = {"model", "label", "mrl", "revision", "provider", "query_prefix", "document_prefix"}
+    #: Keys that only mean something on a hosted candidate, and the key that
+    #: only means something on a local one.
+    hosted_only = {"query_prefix", "document_prefix"}
+    local_only = {"revision"}
     candidates: list[EmbedderCandidate] = []
     for i, e in enumerate(entries):
         if not isinstance(e, dict):
@@ -202,6 +259,18 @@ def load_round_spec(path: str | Path) -> RoundSpec:
             # "false", and the candidate would run truncated on a claim
             # nobody made.
             raise ValueError(f"{path}: candidate {i} has a non-boolean 'mrl' ({e['mrl']!r})")
+        provider = str(e.get("provider") or "")
+        if provider and provider not in KNOWN_PROVIDERS:
+            raise ValueError(
+                f"{path}: candidate {i} names provider {provider!r}; "
+                f"known providers are {sorted(KNOWN_PROVIDERS)}"
+            )
+        misplaced = (hosted_only if not provider else local_only) & set(e)
+        if misplaced:
+            where = "a local candidate" if not provider else f"a {provider} candidate"
+            raise ValueError(
+                f"{path}: candidate {i} is {where} and cannot carry {sorted(misplaced)}"
+            )
         candidates.append(EmbedderCandidate(**e))
     baseline = raw.get("baseline") or candidates[0].name
     spec = RoundSpec(
@@ -213,16 +282,51 @@ def load_round_spec(path: str | Path) -> RoundSpec:
     return spec
 
 
-def build_embedder(candidate: EmbedderCandidate) -> LocalEmbedder:
+def build_embedder(candidate: EmbedderCandidate) -> RoundEmbedder:
     """The one embedder that runs a candidate's whole pass.
 
     One rather than two: the query/document asymmetry is the seam's job now,
-    so the checkpoint is loaded once and both phases of the bench share it.
-    Returned as the concrete class rather than as ``Embedder`` because the
-    caller reads two things off it that only the real model knows -- the
-    native dim it truncated from, and the prompt it declared.
+    so a checkpoint is loaded once and both phases of the bench share it.
+
+    A hosted candidate is built at the LOCAL fleet width, not at the hosted
+    one. That is the whole point of measuring it here: the question is
+    whether this model beats the incumbent in the column the incumbent
+    occupies, so the vectors must land in that column and go through the
+    same scoring path. Using the hosted width instead would compare a model
+    AND a column at once and answer neither question. The endpoint is asked
+    for the width via ``dimensions`` (Matryoshka), which is why a hosted
+    candidate carries the same ``mrl`` claim as a local one, and the claim
+    is checked by a human against the model card rather than by the code:
+    there is no checkpoint here to interrogate.
     """
-    return LocalEmbedder(candidate.model, mrl=candidate.mrl, revision=candidate.revision or None)
+    if not candidate.provider:
+        return LocalEmbedder(
+            candidate.model, mrl=candidate.mrl, revision=candidate.revision or None
+        )
+    if candidate.provider == PROVIDER_SCALEWAY:
+        settings = get_settings()
+        if not settings.scaleway_api_key:
+            raise RuntimeError(
+                f"candidate {candidate.name!r} runs on {PROVIDER_SCALEWAY} but "
+                f"MYCELIUM_SCALEWAY_API_KEY is empty. A round that silently fell back to a "
+                f"local model here would label the wrong model in its own table."
+            )
+        if not candidate.mrl and EMBED_DIM_HOSTED != EMBED_DIM:
+            # The endpoint is being asked for fewer dims than the model's
+            # natural output, which is a truncation like any other.
+            raise RuntimeError(
+                f"candidate {candidate.name!r} asks {PROVIDER_SCALEWAY} for {EMBED_DIM} dims "
+                f"without declaring MRL. Requesting a narrower vector from a non-MRL model "
+                f"degrades it exactly as truncating a local one does, and just as silently."
+            )
+        return HostedEmbedder(
+            api_key=settings.scaleway_api_key,
+            model=candidate.model,
+            base_url=settings.scaleway_base_url,
+            target_dim=EMBED_DIM,
+            prefixes=candidate.prefixes,
+        )
+    raise ValueError(f"candidate {candidate.name!r}: unknown provider {candidate.provider!r}")
 
 
 def system_run(outcome: CandidateOutcome) -> SystemRun:
@@ -396,10 +500,24 @@ def render_round(outcomes: Sequence[CandidateOutcome], *, baseline: str) -> str:
         "prefix the checkpoint's own config declares. Production embeds the same way",
         "(EmbedSide), so this is the shape a promoted candidate would actually ship in.",
     ]
+    hosted = [o.candidate for o in outcomes if o.candidate.provider]
+    if hosted:
+        lines.append("")
+        lines.append(
+            "Ran on a HOSTED endpoint, vectors fetched over HTTP at the fleet width: "
+            + ", ".join(f"{c.name} ({c.provider})" for c in hosted)
+        )
+        lines.append(
+            "Their dim column reads '?' because an endpoint does not report what the model"
+        )
+        lines.append(
+            "emits before the width it was asked for, and their prefix is configured from the"
+        )
+        lines.append("model card rather than read from a checkpoint.")
     prompts = {o.candidate.name: o.query_prompt for o in outcomes if o.query_prompt}
     if prompts:
         lines.append("")
-        lines.append("Query prefixes, as read from each checkpoint:")
+        lines.append("Query prefixes actually applied:")
         for name, prompt in prompts.items():
             lines.append(f"  {name:<{w}}{prompt!r}")
     return "\n".join(lines)

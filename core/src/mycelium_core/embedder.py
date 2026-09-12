@@ -408,6 +408,26 @@ class HostedEmbedder:
     def model_id(self) -> str:
         return self._model
 
+    @property
+    def native_dim(self) -> int | None:
+        """Always ``None``: an ``/v1/embeddings`` endpoint returns a vector of
+        the width that was ASKED for (``dimensions``), and says nothing about
+        the width the model emits before that. Reporting the requested width
+        here would claim a measurement nobody made -- a hosted candidate that
+        truncated and one that did not would look identical, and the round
+        prints this column precisely to tell them apart."""
+        return None
+
+    def declared_prompt(self, side: EmbedSide) -> str | None:
+        """The prefix this client prepends for ``side``, or ``None``.
+
+        Same accessor as :meth:`LocalEmbedder.declared_prompt` and a weaker
+        claim: there it is read from the checkpoint, here it is what someone
+        configured from the model card. The round reports it either way, so a
+        table never implies a model ran instruction-tuned when it did not."""
+        prefix = self._prefixes.get(side, "")
+        return prefix or None
+
     def _payload(self, input_: object) -> dict[str, object]:
         return {"model": self._model, "input": input_, "dimensions": self._target_dim}
 

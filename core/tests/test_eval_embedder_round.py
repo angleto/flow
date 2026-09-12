@@ -15,11 +15,15 @@ from pathlib import Path
 
 import pytest
 
+from mycelium_core.config import get_settings
+from mycelium_core.embed_dims import EMBED_DIM
+from mycelium_core.embedder import EmbedSide, HostedEmbedder
 from mycelium_core.services import eval_public_bench as bench
 from mycelium_core.services.eval_baselines import PairedStat, paired_stats
 from mycelium_core.services.eval_embedder_round import (
     CandidateOutcome,
     EmbedderCandidate,
+    build_embedder,
     load_round_spec,
     render_round,
     system_run,
@@ -308,3 +312,127 @@ def test_the_round_renders_every_candidate_with_its_verdict() -> None:
 def test_rendering_refuses_a_baseline_that_did_not_run() -> None:
     with pytest.raises(ValueError, match="bge-m3"):
         render_round([_outcome("other", [_score("i1", ranks={"q1": 1})])], baseline="bge-m3")
+
+
+# --- the hosted arm ---------------------------------------------------------
+#
+# A model too large to sit in the backend pod can still be measured against
+# the incumbent, by fetching its vectors over HTTP at the LOCAL fleet width.
+# What must not happen is a hosted row that reads like a local one: the
+# evidence behind it is weaker (no checkpoint to interrogate, no pin the run
+# can enforce), and the spec keys enforce that difference.
+
+
+def test_a_hosted_candidate_is_built_at_the_LOCAL_fleet_width(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The question is whether this model beats the incumbent in the column
+    the incumbent occupies. Built at the hosted width it would compare a
+    model and a column at once and answer neither."""
+    monkeypatch.setenv("MYCELIUM_SCALEWAY_API_KEY", "sk-test")
+    get_settings.cache_clear()
+    try:
+        emb = build_embedder(
+            EmbedderCandidate(
+                model="qwen3-embedding-8b",
+                label="hosted-8B",
+                provider="scaleway",
+                mrl=True,
+                query_prefix=QUERY_PREFIX,
+            )
+        )
+        assert isinstance(emb, HostedEmbedder)
+        assert emb._target_dim == EMBED_DIM
+        assert emb.declared_prompt(EmbedSide.query) == QUERY_PREFIX
+        assert emb.declared_prompt(EmbedSide.document) is None
+        # Not knowable from an endpoint, and saying so is the point.
+        assert emb.native_dim is None
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_hosted_candidate_without_a_key_stops_the_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Falling back to the local default here would label the wrong model in
+    the round's own table, which is worse than not running."""
+    monkeypatch.setenv("MYCELIUM_SCALEWAY_API_KEY", "")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="SCALEWAY_API_KEY"):
+            build_embedder(
+                EmbedderCandidate(model="qwen3-embedding-8b", provider="scaleway", mrl=True)
+            )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_hosted_candidate_must_declare_mrl_to_ask_for_a_narrower_vector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Asking an endpoint for fewer dims than the model's natural output is a
+    truncation like any other, and degrades a non-MRL model just as
+    silently. The local gate lives in LocalEmbedder; this is the same rule on
+    the side where there is no checkpoint to check it against."""
+    monkeypatch.setenv("MYCELIUM_SCALEWAY_API_KEY", "sk-test")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="MRL"):
+            build_embedder(
+                EmbedderCandidate(model="qwen3-embedding-8b", provider="scaleway", mrl=False)
+            )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_prefixes_belong_to_hosted_candidates_only(tmp_path: Path) -> None:
+    """On a local candidate the checkpoint already states the instruction, so
+    a spec-level prefix is the copy that drifts. Refused, not merged."""
+    with pytest.raises(ValueError, match="local candidate"):
+        load_round_spec(
+            _write(tmp_path, {"candidates": [{"model": "Qwen/x", "query_prefix": "Instruct:"}]})
+        )
+
+
+def test_a_pin_belongs_to_local_candidates_only(tmp_path: Path) -> None:
+    """An endpoint serves whatever weights the provider deployed. A
+    ``revision`` there would be a reproducibility claim the run cannot
+    enforce, which is worse than no claim."""
+    with pytest.raises(ValueError, match="scaleway candidate"):
+        load_round_spec(
+            _write(
+                tmp_path,
+                {"candidates": [{"model": "q", "provider": "scaleway", "revision": "abc123"}]},
+            )
+        )
+
+
+def test_an_unknown_provider_stops_the_round(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="openai"):
+        load_round_spec(
+            _write(tmp_path, {"candidates": [{"model": "text-embedding-3", "provider": "openai"}]})
+        )
+
+
+def test_a_hosted_row_says_so_in_the_table() -> None:
+    """A reader must not take a hosted row for a local one: it carries no
+    native dim and its prefix was configured, not read."""
+    scores_base = [_score("i1", ranks=_SEVEN_WINS_BASE)]
+    scores_cand = [_score("i1", ranks=_SEVEN_WINS_CAND)]
+    out = render_round(
+        [
+            _outcome("bge-m3", scores_base),
+            CandidateOutcome(
+                candidate=EmbedderCandidate(
+                    model="qwen3-embedding-8b", label="hosted-8B", provider="scaleway", mrl=True
+                ),
+                report=bench.aggregate("locomo", 10, scores_cand, ["qwen3-embedding-8b"]),
+                scores=tuple(scores_cand),
+                native_dim=None,
+                query_prompt=QUERY_PREFIX,
+            ),
+        ],
+        baseline="bge-m3",
+    )
+    assert "HOSTED" in out and "scaleway" in out
+    assert "?" in out  # the dim it cannot report

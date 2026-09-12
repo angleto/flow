@@ -1,0 +1,17 @@
+{
+  "notes": "BRACCIO LOCALE del round pre-registrato in embedder-round-2026-09.json, che resta la pre-registrazione completa: stessa domanda, stessa regola di promozione, stessi limiti dichiarati. Qui ci sono solo i candidati ADOTTABILI nel tier locale, ed e' una restrizione decisa il 2026-09-12 PRIMA di qualsiasi numero, per una ragione che non dipende dai numeri: Qwen3-Embedding-4B (2560 dim, ~16GB fp32) e 8B (4096 dim, ~30GB fp32) non stanno nel pod backend, che ha gia' fatto OOM con bge-m3 (task 91c36656), e non stanno nemmeno nei 16GB della macchina su cui gira questo braccio. Misurarli qui avrebbe prodotto un vincitore non eseguibile. Vanno nel braccio hosted (embedder-round-2026-09-hosted.json), dove il calcolo e' del provider.\n\nCONSEGUENZA SULLA SOGLIA, dichiarata prima del run: questo braccio fa UN confronto contro l'incumbent, quindi Bonferroni non corregge nulla e la soglia e' alpha = 0.05. Non e' un allentamento della regola: la correzione esiste per il numero di confronti effettivamente fatti, e farne uno solo e' la condizione in cui 0.05 e' la soglia giusta. Il braccio hosted avra' la sua.\n\nCosa questo braccio puo' dire, anche se l'esito e' \"nessuna promozione\" (che e' l'esito probabile: l'articolo COLM 2026 da' i due modelli PARI sul retrieval, 44.1 contro 44.3, e luglio li aveva gia' messi in banda a 0.726 / 0.713). Qwen3-Embedding-0.6B e' il controllo doppio: stessa taglia di bge-m3, stesso modello che a luglio perse, ma misurato allora SENZA il suo prefisso di istruzione e ora CON, perche' il seam ha un lato e il prefisso viene letto dal checkpoint. Se il delta si muove, il finding e' sul metodo di luglio prima che sul modello, ed e' una domanda che vale la pena di chiudere a prescindere da chi vince.\n\nFatti verificati dai model card il 2026-09-12: bge-m3 1024 nativi, nessuna MRL dichiarata, MIT; Qwen3-Embedding-0.6B 1024 nativi (quindi gira NON troncato: il flag mrl non morde a questa larghezza), MRL si', Apache-2.0. Revisioni pinnate: un id HuggingFace e' mutabile e Qwen3-Embedding-0.6B e' stato ripubblicato il 2026-04-20, DOPO il round di luglio che lo ha misurato.",
+  "baseline": "bge-m3",
+  "candidates": [
+    {
+      "label": "bge-m3",
+      "model": "BAAI/bge-m3",
+      "revision": "5617a9f61b028005a4858fdac845db406aefb181"
+    },
+    {
+      "label": "qwen3-emb-0.6B",
+      "model": "Qwen/Qwen3-Embedding-0.6B",
+      "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+      "mrl": true
+    }
+  ]
+}
